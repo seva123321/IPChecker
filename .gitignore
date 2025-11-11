@@ -1,0 +1,15 @@
+node_modules/
+.env
+dist/
+build/
+models_old/
+uploads/
+.DS_Store
+backUpBD.sql
+npm-debug.log*
+constants.js
+db.js
+
+бд.docx
+scan_report.json
+scan_report_all (2).json
