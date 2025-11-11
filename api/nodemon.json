@@ -1,0 +1,26 @@
+{
+  "watch": [
+    "server.js",
+    "routers/",
+    "models/",
+    "controllers/",
+    "services/"
+  ],
+  "ignore": [
+    "public/**/*",
+    "*.log",
+    "*.txt",
+    "node_modules/",
+    ".git/",
+    "processed_files.txt",
+    "failed_files.txt",
+    "json_loader.log"
+  ],
+  "ext": "js",
+  "delay": "5000",
+  "verbose": false,
+  "restartable": "rs",
+  "env": {
+    "NODE_ENV": "development"
+  }
+}
