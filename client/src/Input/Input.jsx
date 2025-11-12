@@ -1,44 +1,102 @@
 import cn from './Input.module.css'
+import { forwardRef } from 'react'
 
-export function Input({
-  value,
-  onChange,
-  placeholder,
-  containerClass = {},
-  showClear = false,
-  onClear,
-  ...props
-}) {
-  const containerStyle = {
-    width: containerClass.width,
-    marginRight: containerClass.marginRight,
-    position: 'relative',
-    display: 'inline-block',
+export const Input = forwardRef(
+  (
+    {
+      value,
+      onChange,
+      placeholder,
+      containerClass = {},
+      showClear = false,
+      onClear,
+      suffix,
+      errorMessage = '',
+      ...props
+    },
+    ref
+  ) => {
+    const containerStyle = {
+      width: containerClass.width,
+      marginRight: containerClass.marginRight,
+      position: 'relative',
+      display: 'inline-block',
+    }
+    return (
+      <div style={containerStyle}>
+        <input
+          ref={ref}
+          type="text"
+          value={value}
+          onChange={onChange}
+          placeholder={placeholder}
+          className={`${cn.input} ${errorMessage ? cn.error : ''}`}
+          {...props}
+        />
+        {showClear && value && (
+          <button
+            type="button"
+            className={cn.clearButton}
+            onClick={onClear}
+            aria-label="Очистить"
+          >
+            ×
+          </button>
+        )}
+        {suffix}
+        {errorMessage && <div className={cn.errorText}>{errorMessage}</div>}
+      </div>
+    )
   }
+)
+// import cn from './Input.module.css'
+// import { forwardRef } from 'react'
 
-  return (
-    <div style={containerStyle}>
-      <input
-        type="text"
-        value={value}
-        onChange={onChange}
-        placeholder={placeholder}
-        className={cn.input}
-        {...props}
-      />
-      {showClear && value && (
-        <button
-          type="button"
-          className={cn.clearButton}
-          onClick={onClear}
-          aria-label="Очистить"
-        >
-          ×
-        </button>
-      )}
-    </div>
-  )
-}
+// export const Input = forwardRef(
+//   (
+//     {
+//       value,
+//       onChange,
+//       placeholder,
+//       containerClass = {},
+//       showClear = false,
+//       onClear,
+//       ...props
+//     },
+//     ref
+//   ) => {
+//     const containerStyle = {
+//       width: containerClass.width,
+//       marginRight: containerClass.marginRight,
+//       position: 'relative',
+//       display: 'inline-block',
+//     }
+
+//     return (
+//       <div style={containerStyle}>
+//         <input
+//           ref={ref}
+//           type="text"
+//           value={value}
+//           onChange={onChange}
+//           placeholder={placeholder}
+//           className={cn.input}
+//           {...props}
+//         />
+//         {showClear && value && (
+//           <button
+//             type="button"
+//             className={cn.clearButton}
+//             onClick={onClear}
+//             aria-label="Очистить"
+//           >
+//             ×
+//           </button>
+//         )}
+//       </div>
+//     )
+//   }
+// )
 
 // import { forwardRef } from 'react'
 

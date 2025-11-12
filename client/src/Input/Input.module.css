@@ -47,6 +47,7 @@
   border-radius: 8px;
   color: var(--text-light);
   transition: var(--transition);
+  position: relative;
 }
 
 .input:focus {
