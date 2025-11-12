@@ -1,0 +1,41 @@
+.inputContainer {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 300px;
+}
+
+.inputWrapper {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+}
+
+.input {
+  width: 100%;
+  padding: 0.875rem 1rem;
+  font-size: 14px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-light);
+  transition: var(--transition);
+}
+
+.input:focus {
+  border-color: #1890ff;
+  outline: none;
+}
+
+.sendButton {
+  margin-left: 8px;
+  color: #1890ff;
+  text-decoration: underline;
+  cursor: pointer;
+  position: absolute;
+  right: 0;
+}
+
+.sendButton:hover {
+  text-decoration: none;
+}
