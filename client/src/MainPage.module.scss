@@ -1,0 +1,110 @@
+.wrapper {
+  margin: 32px 16px;
+}
+
+.itemsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 24px;
+  max-width: 1400px;
+  margin: 0 auto;
+  margin-top: 16px;
+
+  /* Адаптив: 1 колонка на мобильных */
+  @media (max-width: 900px) {
+    grid-template-columns: 1fr;
+    gap: 20px;
+    padding: 0 16px;
+  }
+
+  & > ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: contents;
+  }
+
+  & > ul > li {
+    display: contents;
+  }
+}
+
+.groupedList {
+  grid-template-columns: 1fr; 
+  width: clamp(400px, 100%, 800px);
+}
+
+.noData {
+  text-align: center;
+  font-size: 24px;
+}
+
+/* Адаптив: 1 колонка на мобильных */
+@media (max-width: 900px) {
+  .itemsGrid {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+}
+
+.panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  padding: 0 20px;
+  margin-bottom: 32px;
+
+  & > h1 {
+    color: #262626;
+  }
+
+  /* Важно: ограничить высоту, если нужно */
+  /* Например: max-height: 600px; */
+  @media (max-width: 900px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.loading {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  font-size: 42px;
+  color: rgb(27, 37, 182);
+  font-style: oblique;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+
+  & > span {
+    font-size: 24px;
+    font-weight: 600;
+  }
+}
+
+.loadMoreContainer {
+  text-align: center;
+  margin: 20px 0;
+}
+
+.loadMoreButton {
+  padding: 10px 20px;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  
+  &:hover:not(:disabled) {
+    background-color: #0056b3;
+  }
+  
+  &:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+  }
+}
+
