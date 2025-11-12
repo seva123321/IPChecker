@@ -1,0 +1,55 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  /* Цветовая палитра для беспилотников */
+  --primary-dark: #d7e3f5;
+  --secondary-dark: #b3c5e1;
+  --accent-blue: #64ffda;
+  --accent-blue-dark: #52c4b9;
+  --text-dark: #ccd6f6;
+  --text-light: #262626;
+  --text-secondary: #8892b0;
+  --border-color: rgba(136, 146, 176, 0.2);
+  --card-bg: rgba(17, 34, 64, 0.7);
+  --card-border: rgba(136, 146, 176, 0.1);
+  --shadow: 0 10px 30px rgba(2, 12, 27, 0.7);
+  --transition: all 0.3s ease;
+}
+
+body {
+  margin: 0;
+  font-family:
+    'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+
+  /* min-height: 100vh; */
+  display: flex;
+  flex-direction: column;
+  color: var(--text-light);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* background: linear-gradient(135deg, var(--primary-dark) 0%); */
+  background: linear-gradient(135deg, var(--primary-dark) 0%, var(--secondary-dark) 100%);
+}
+
+#root {
+  width: 100%;
+  /* min-height: 100vh; */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+  background: linear-gradient(
+    135deg,
+    var(--primary-dark) 0%,
+    var(--secondary-dark) 100%
+  );
+}
+
+li {
+  list-style: none;
+}
