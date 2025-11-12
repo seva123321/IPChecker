@@ -1,0 +1,26 @@
+.listGroup {
+    &  li {
+      margin-bottom: 24px ;
+    }
+  }
+
+  .groupHeaderWrapper {
+    padding: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 700;
+    font-size: 32px;
+    border-radius: 5px;
+    box-shadow: 0 6px 23px #468af49c;
+    margin-bottom: 20px;
+  }
+  
+  .groupHeader {
+    display: inline-block;
+    margin-bottom: 0px;
+    padding: 10px;
+    border-radius: 12px;
+    background: #d4edda;
+    text-align: center;
+  }
