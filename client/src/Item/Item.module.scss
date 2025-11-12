@@ -1,0 +1,208 @@
+.ipItem {
+  background: #fff;
+  position: relative;
+  height: 100%;
+  border: 1px solid #e0e0e0;
+  border-radius: 10px;
+  padding: 18px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+  transition: box-shadow 0.2s ease;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  &:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+
+  &.highlighted {
+    border-left: 4px solid #28a745;
+    background-color: #f8fff9;
+  }
+} 
+
+/* === Заголовок IP === */
+.ipHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.ipAddressContainer {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.ipAddress {
+  font-size: 18px;
+  font-weight: 600;
+  font-family: 'Courier New', monospace;
+  color: #222;
+  letter-spacing: -0.2px;
+}
+
+.hasDataIndicator {
+  color: #28a745;
+  font-size: 18px;
+  cursor: help;
+}
+
+.statusWrapper {
+  display: flex;
+  flex-direction: column;
+  position: absolute;
+  top: 16px;
+  right: 10px;
+  gap: 6px;
+}
+
+.statusReachable {
+  background: #d4edda;
+  text-align: center;
+  color: #155724;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.statusUnreachable {
+  background: #f8d7da;
+  color: #721c24;
+  padding: 3px 10px;
+  border-radius: 12px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* === Порты === */
+.portsSection {
+  margin: 14px 0;
+}
+
+.portsTitle {
+  font-weight: 600;
+  color: #444;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+
+.portsList {
+  font-size: 14px;
+  color: #333;
+  margin-bottom: 4px;
+  line-height: 1.4;
+
+  strong {
+    color: #007bff;
+    margin-right: 6px;
+  }
+}
+
+/* === Время обновления и страна === */
+.updateTime {
+  font-size: 13px;
+  color: #666;
+  margin: 8px 0;
+  font-style: italic;
+}
+
+.ipCountry {
+  display: inline-block;
+  background: #e9ecef;
+  color: #495057;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 13px;
+  margin-top: 6px;
+}
+
+/* === Кнопка Whois === */
+.whoisToggle {
+  margin-top: 12px;
+  padding: 6px 14px;
+  background: #6c757d;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.2s;
+
+  &:hover {
+    background: #5a6268;
+  }
+}
+
+/* === Блок Whois === */
+.whoisInfo {
+  margin-top: 14px;
+  padding: 14px;
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+
+  ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  li {
+    margin-bottom: 8px;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+
+  .whoisKey {
+    font-weight: 600;
+    color: #007bff;
+    margin-right: 6px;
+    min-width: 120px;
+    display: inline-block;
+  }
+}
+
+/* === Ошибка Whois === */
+.whoisError {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffeaa7;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+/* === Адаптивность === */
+@media (max-width: 768px) {
+  .ipItem {
+    padding: 16px;
+  }
+
+  .ipHeader {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .portsList {
+    font-size: 13px;
+  }
+
+  .whoisInfo {
+    font-size: 13px;
+  }
+
+  .whoisKey {
+    display: block;
+    margin-bottom: 4px;
+  }
+}
