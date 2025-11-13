@@ -26,7 +26,8 @@ export function MainPage({ service }) {
         page: 1,
         limit: 10,
       })
-      setReportData(data?.data || [])
+      
+      setReportData(data || [])
       setPath((prev) => ({ params: filteredParams, endpoint }))
       if (endpoint !== path.endpoint) setPage(1)
     } catch (error) {
@@ -42,7 +43,7 @@ export function MainPage({ service }) {
   const fetchGroupData = async (endpoint) => {
     try {
       const data = await service.getData(endpoint, {})
-      setReportData(data?.data || [])
+      setReportData(data || [])
     } catch (error) {
       console.error(`Error fetching grouped report for ${endpoint}:`, error)
     }
@@ -104,6 +105,7 @@ export function MainPage({ service }) {
         <PanelFilters
           onSearch={(endpoint, params) => fetchData(endpoint, params)}
           onGroup={(endpoint) => fetchGroupData(endpoint)}
+          service={service}
         />
         <PanelUpload service={service} />
       </div>
@@ -125,7 +127,7 @@ export function MainPage({ service }) {
             <GroupList
               data={reportData}
               service={service}
-              currentEndpoint={reportData.field}
+              currentEndpoint={reportData?.field}
             />
           ) : reportData?.items.length > 0 ? (
             
