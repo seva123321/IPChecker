@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+// DataList.jsx
+import { useState, useEffect, useRef } from 'react'
 import { Button } from 'antd'
 import cn from './DataList.module.css'
 import { Input } from '../Input/Input'
@@ -6,101 +7,96 @@ import { PortDataList } from '../PortDataList/PortDataList'
 
 export const DataList = ({
   service,
-  onKeywordChange,
-  keywordValue,
-  placeholder = 'Поиск по портам Пример, 443 (https)',
+  value, // controlled: получаем значение из родителя
+  onChange, // controlled: вызываем при любом изменении
+  placeholder = 'Поиск по портам (например, 443 или 443 (https))',
 }) => {
-  const [inputValue, setInputValue] = useState('')
   const [dataList, setDataList] = useState([])
   const [filteredDataList, setFilteredDataList] = useState([])
   const [showSendButton, setShowSendButton] = useState(false)
-  const [errorMessage, setErrorMessage] = useState('')
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const inputRef = useRef(null)
 
+  // Загружаем данные один раз при первом фокусе или монтировании
   const fetchData = async () => {
+    if (dataList.length > 0) return // уже загружено
     try {
       const response = await service.getData('ports/data')
-      const dataPrepared = response.data?.port_data.map(
-        (el) => `${el.port} (${el.name})`
-      )
+      const dataPrepared =
+        response?.port_data?.map((el) => `${el.port} (${el.name})`) || []
+
       setDataList(dataPrepared)
       setFilteredDataList(dataPrepared)
     } catch (error) {
-      console.error('Error fetching ', error)
+      console.error('Error fetching port data:', error)
     }
   }
 
   const handleInputFocus = () => {
-    if (!dataList.length) fetchData()
+    fetchData()
   }
 
   const handleInputChange = (e) => {
-    let value = e.target.value
-    // Проверяем формат ввода: число + пробел + название порта в скобках
-    if (/^\d+\s+\([a-zA-Z]+\)$/.test(value)) {
-      setInputValue(value)
-      setErrorMessage('')
-      // Вызываем обратный вызов для обновления состояния в родительском компоненте
-      if (onKeywordChange) {
-        onKeywordChange(value)
-      }
-    } else {
-      // Если не соответствует формату, отображаем сообщение об ошибке
-      setInputValue(value)
-      setErrorMessage('Введите значение в формате "443 (https)"')
-    }
-    if (value.trim() === '') {
-      setShowSendButton(false)
-      setErrorMessage('')
-      // Сбрасываем фильтрацию и показываем весь список
+    const inputValue = e.target.value
+    onChange(inputValue) // передаём любое значение родителю
+
+    // Фильтрация списка
+    if (inputValue.trim() === '') {
       setFilteredDataList(dataList)
-      // Вызываем обратный вызов для обновления состояния в родительском компоненте
-      if (onKeywordChange) {
-        onKeywordChange('')
-      }
+      setShowSendButton(false)
     } else {
-      const filteredData = dataList.filter((item) =>
-        item.toLowerCase().includes(value.toLowerCase())
+      const filtered = dataList.filter((item) =>
+        item.toLowerCase().includes(inputValue.toLowerCase())
       )
-      setFilteredDataList(filteredData)
-      setShowSendButton(
-        !filteredData.some((item) => item.toLowerCase() === value.toLowerCase())
+      setFilteredDataList(filtered)
+
+      // Показываем кнопку "Отправить", только если:
+      // - введено число (номер порта)
+      // - такого порта нет в списке (даже без имени)
+      const isPortNumber = /^\d+$/.test(inputValue.trim())
+      const portExists = dataList.some((item) =>
+        item.startsWith(inputValue.trim() + ' ')
       )
+      setShowSendButton(isPortNumber && !portExists)
     }
   }
 
   const handleClear = () => {
-    setInputValue('')
+    onChange('')
     setShowSendButton(false)
-    setErrorMessage('')
-    // Сбрасываем фильтрацию и показываем весь список
     setFilteredDataList(dataList)
-    // Вызываем обратный вызов для обновления состояния в родительском компоненте
-    if (onKeywordChange) {
-      onKeywordChange('')
-    }
   }
 
-  // Обновляем inputValue при изменении keywordValue из родителя
+  // Обновляем фильтр при изменении value извне (например, после clearAll)
   useEffect(() => {
-    setInputValue(keywordValue)
-    // При изменении keywordValue, если список данных загружен, обновляем фильтр
-    if (dataList.length > 0) {
+    if (value.trim() === '') {
       setFilteredDataList(dataList)
+      setShowSendButton(false)
+    } else {
+      const filtered = dataList.filter((item) =>
+        item.toLowerCase().includes(value.toLowerCase())
+      )
+      setFilteredDataList(filtered)
+
+      const isPortNumber = /^\d+$/.test(value.trim())
+      const portExists = dataList.some((item) =>
+        item.startsWith(value.trim() + ' ')
+      )
+      setShowSendButton(isPortNumber && !portExists)
     }
-  }, [keywordValue, dataList])
+  }, [value, dataList])
 
   return (
     <div>
       <Input
+        ref={inputRef}
         list="portsName"
         placeholder={placeholder}
-        value={inputValue}
+        value={value}
         onChange={handleInputChange}
         onFocus={handleInputFocus}
         suffix={
-          showSendButton &&
-          !errorMessage && (
+          showSendButton && (
             <Button
               type="link"
               onClick={() => setIsModalOpen(true)}
@@ -111,20 +107,19 @@ export const DataList = ({
           )
         }
         onClear={handleClear}
-        errorMessage={errorMessage}
         className={cn.input}
         containerClass={{ width: 300 }}
       />
       <datalist id="portsName">
-        {filteredDataList?.map((item) => (
+        {filteredDataList.map((item) => (
           <option value={item} key={item} />
         ))}
       </datalist>
 
       <PortDataList
         service={service}
-        inputValue={inputValue}
-        onKeywordChange={onKeywordChange}
+        inputValue={value}
+        onKeywordChange={onChange}
         isModalOpen={isModalOpen}
         setIsModalOpen={setIsModalOpen}
         fetchData={fetchData}
