@@ -6,7 +6,9 @@ CREATE TABLE IF NOT EXISTS hosts (
     id SERIAL PRIMARY KEY,
     ip INET NOT NULL UNIQUE,
     reachable BOOLEAN NOT NULL DEFAULT true,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    priority_id INTEGER REFERENCES host_priorities(id),
+    grouping_id INTEGER REFERENCES host_groupings(id)
 );
 
 -- Индекс для поиска по частичному IP (например: '192.168.%')
@@ -15,7 +17,64 @@ CREATE INDEX IF NOT EXISTS idx_hosts_ip_text ON hosts ((ip::TEXT) text_pattern_o
 -- Индекс для сортировки и фильтрации по времени
 CREATE INDEX IF NOT EXISTS idx_hosts_updated_at ON hosts (updated_at);
 
--- 3. Таблица известных портов
+-- Индекс для поиска по приоритету
+CREATE INDEX IF NOT EXISTS idx_hosts_priority_id ON hosts (priority_id);
+
+-- Индекс для поиска по группировке
+CREATE INDEX IF NOT EXISTS idx_hosts_grouping_id ON hosts (grouping_id);
+
+-- 3. Таблица приоритетов хостов
+CREATE TABLE IF NOT EXISTS host_priorities (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(50) NOT NULL UNIQUE -- Обычный, Интересный, Важный
+);
+
+-- Вставляем значения по умолчанию
+INSERT INTO host_priorities (name) VALUES
+  ('Обычный'),
+  ('Интересный'),
+  ('Важный')
+ON CONFLICT (name) DO NOTHING;
+
+-- 4. Таблица комментариев к приоритетам
+CREATE TABLE IF NOT EXISTS priority_comments (
+    id SERIAL PRIMARY KEY,
+    host_id INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    priority_id INTEGER NOT NULL REFERENCES host_priorities(id) ON DELETE CASCADE,
+    comment TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(host_id, priority_id)
+);
+
+-- Индекс для поиска по хосту и приоритету
+CREATE INDEX IF NOT EXISTS idx_priority_comments_host_priority ON priority_comments (host_id, priority_id);
+
+-- 5. Таблица группировки
+CREATE TABLE IF NOT EXISTS host_groupings (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE -- МИД, Гражданская промышленность, Военная промышленность, Новостные организации
+);
+
+-- Вставляем значения по умолчанию
+INSERT INTO host_groupings (name) VALUES
+  ('МИД'),
+  ('Гражданская промышленность'),
+  ('Военная промышленность'),
+  ('Новостные организации'),
+  ('Финансовый сектор'),
+  ('Телекоммуникации'),
+  ('Государственные учреждения'),
+  ('Образовательные организации'),
+  ('Здравоохранение'),
+  ('Энергетика'),
+  ('Транспорт и логистика'),
+  ('IT-инфраструктура и облака'),
+  ('Критическая информационная инфраструктура (КИИ)'),
+  ('Социальные сети и мессенджеры'),
+  ('Хостинг-провайдеры и дата-центры')
+ON CONFLICT (name) DO NOTHING;
+
+-- 6. Таблица известных портов
 CREATE TABLE IF NOT EXISTS well_known_ports (
     port INT PRIMARY KEY,
     name TEXT NOT NULL
@@ -71,7 +130,6 @@ CREATE TABLE IF NOT EXISTS whois (
 
 -- Индекс для поиска по частичному значению (например: '%Google%')
 CREATE INDEX IF NOT EXISTS idx_whois_value_trgm ON whois USING GIN (value gin_trgm_ops);
-
 
 -- Вставляем только важные поля для определения принадлежности, контактов и локации
 INSERT INTO public.whois_keys (key_name) VALUES
@@ -163,34 +221,3 @@ BEGIN
     END IF;
 END;
 $$ LANGUAGE plpgsql;
-
--- SELECT h.ip, k.key_name, w.value
--- FROM hosts h
--- JOIN whois w ON h.id = w.host_id
--- JOIN whois_keys k ON w.key_id = k.id
--- WHERE w.value ILIKE '%Google%';
-
--- SELECT upsert_host_with_data(
---   '142.250.191.106',
---   true,
---   ARRAY[80, 443],
---   ARRAY[22, 23, 25, 53],
---   '{"netname": "GOOGLE", "country": "US", "org": "Google LLC"}'::JSONB
--- );
-
--- SELECT upsert_host_with_data(
---   '142.250.191.106', -- тот же IP → полная замена данных
---   true,
---   ARRAY[80, 443, 8080],
---   ARRAY[22, 25],
---   '{"netname": "GOOGLE-CLOUD", "org": "Google Cloud"}'::JSONB
--- );
-
--- SELECT upsert_host_with_data(
---   '1.1.1.1',
---   true,
---   ARRAY[53, 80, 443],
---   ARRAY[22, 23],
---   NULL
--- );
-
