@@ -21,6 +21,22 @@ const Host = sequelize.define('Host', {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW,
   },
+  priority_id: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: {
+      model: 'host_priorities',
+      key: 'id'
+    }
+  },
+  grouping_id: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: {
+      model: 'host_groupings',
+      key: 'id'
+    }
+  },
 }, {
   tableName: 'hosts',
   timestamps: false,

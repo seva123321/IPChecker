@@ -1,9 +1,11 @@
-// models/index.js
 import Host from './Host.js';
 import Port from './Port.js';
 import WellKnownPort from './WellKnownPort.js';
 import WhoisKey from './WhoisKey.js';
 import Whois from './Whois.js';
+import Priority from './Priority.js';
+import PriorityComment from './PriorityComment.js';
+import Grouping from './Grouping.js';
 import sequelize from '../db.js';
 
 // Связи
@@ -16,6 +18,20 @@ Whois.belongsTo(Host, { foreignKey: 'host_id' });
 Whois.belongsTo(WhoisKey, { foreignKey: 'key_id', onDelete: 'CASCADE' });
 WhoisKey.hasMany(Whois, { foreignKey: 'key_id' });
 
+// Связи для приоритетов
+Host.belongsTo(Priority, { foreignKey: 'priority_id' });
+Priority.hasMany(Host, { foreignKey: 'priority_id' });
+
+// Связи для комментариев приоритетов
+PriorityComment.belongsTo(Host, { foreignKey: 'host_id' });
+Host.hasOne(PriorityComment, { foreignKey: 'host_id' });
+PriorityComment.belongsTo(Priority, { foreignKey: 'priority_id' });
+Priority.hasMany(PriorityComment, { foreignKey: 'priority_id' });
+
+// Связи для группировки
+Host.belongsTo(Grouping, { foreignKey: 'grouping_id' });
+Grouping.hasMany(Host, { foreignKey: 'grouping_id' });
+
 // Экспорт
 const models = {
   Host,
@@ -23,6 +39,9 @@ const models = {
   WellKnownPort,
   WhoisKey,
   Whois,
+  Priority,
+  PriorityComment,
+  Grouping,
 };
 
 export {
@@ -31,7 +50,9 @@ export {
   WellKnownPort,
   WhoisKey,
   Whois,
+  Priority,
+  PriorityComment,
+  Grouping,
   sequelize,
   models,
 };
-
