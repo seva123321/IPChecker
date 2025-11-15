@@ -71,6 +71,10 @@ const callApi = async (method, pathname, params = {}, data = null) => {
       url = createUrl(pathname)
       console.log(`${method.toUpperCase()} - URL:`, url.toString())
       return await axios.put(url.toString(), data)
+    case 'patch':
+      url = createUrl(pathname)
+      console.log(`${method.toUpperCase()} - URL:`, url.toString())
+      return await axios.patch(url.toString(), data)
     case 'delete':
       url = createUrl(pathname, params)
       console.log(`${method.toUpperCase()} - URL:`, url.toString())
@@ -98,6 +102,15 @@ export class ApiService {
   static async postData(pathname, formData) {
     try {
       const response = await callApi('post', pathname, {}, formData)
+      return response.data
+    } catch (error) {
+      throw handleApiError(error)
+    }
+  }
+
+  static async patchData(pathname, formData) {
+    try {
+      const response = await callApi('patch', pathname, {}, formData)
       return response.data
     } catch (error) {
       throw handleApiError(error)
