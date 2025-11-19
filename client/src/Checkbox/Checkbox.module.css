@@ -1,0 +1,17 @@
+.checkboxContainer {
+    display: inline-block;
+    position: relative;
+  }
+  
+  .checkboxInput {
+    margin-right: 8px;
+  }
+  
+  .checkboxLabel {
+    vertical-align: middle;
+  }
+  
+  .errorText {
+    color: red;
+    font-size: 12px;
+  }
