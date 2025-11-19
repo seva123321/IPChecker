@@ -1,0 +1,143 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  background-color: #f9f9fb;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  text-align: center;  
+  width: 100%;
+  & > h2 {
+    color: var(--text-light);
+    margin-bottom: 8px;
+  }
+}
+.list {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 20px;
+  gap: 4px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+.searchGroup {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px;
+  border-radius: 10px;
+}
+
+/* Поле ввода занимает основное место */
+.searchGroup > :global(.input-wrapper) {
+  flex: 1;
+  min-width: 250px;
+}
+.btnGroup {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+/* Стили кнопок */
+.searchButton,
+.groupButton {
+  padding: 6px 12px;
+  font-size: 14px;
+  border-radius: 4px;
+  border: none;
+  align-self: flex-end;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color 0.2s,
+    opacity 0.2s;
+}
+.searchButton {
+  background-color: #007bff;
+  color: white;
+  &:hover:not(:disabled) {
+    background-color: #0069d9;
+  }
+  &:disabled {
+    background-color: #d6d6d6;
+    cursor: not-allowed;
+  }
+}
+.groupButton {
+  background-color: #28a745;
+  color: white;
+  &:hover:not(:disabled) {
+    background-color: #218838;
+  }
+  &:disabled {
+    background-color: #d6d6d6;
+    cursor: not-allowed;
+  }
+}
+/* Общие кнопки внизу */
+.actionsGroup {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  margin-top: 12px;
+}
+.searchAllButton,
+.clearAllButton {
+  padding: 8px 16px;
+  font-size: 15px;
+  font-weight: 500;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.searchAllButton {
+  background-color: #17a2b8;
+  color: white;
+  &:hover:not(:disabled) {
+    background-color: #138496;
+  }
+  &:disabled {
+    background-color: #c2c2c2;
+    cursor: not-allowed;
+  }
+}
+.clearAllButton {
+  background-color: #dc3545;
+  color: white;
+  &:hover:not(:disabled) {
+    background-color: #c82333;
+  }
+  &:disabled {
+    background-color: #c2c2c2;
+    cursor: not-allowed;
+  }
+}
+/* Адаптивность на мобильных */
+@media (max-width: 600px) {
+  .panel {
+    padding: 16px;
+  }
+  .searchGroup {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .btnGroup {
+    justify-content: flex-start;
+  }
+  .actionsGroup {
+    flex-direction: column;
+  }
+}
+.whois__word {
+  color: #0069d9;
+}
+
+.dateRange {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+}
