@@ -1,0 +1,41 @@
+.whoisItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid #f0f0f0;
+
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.whoisKey {
+  font-weight: 600;
+  color: #1890ff;
+  font-size: 12px;
+  min-width: 140px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.whoisValue {
+  font-size: 12px;
+  color: #595959;
+  line-height: 1.4;
+  flex: 1;
+  word-break: break-word;
+}
+
+/* === Адаптивность === */
+@media (max-width: 768px) {
+  .whoisItem {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .whoisKey {
+    min-width: auto;
+  }
+}

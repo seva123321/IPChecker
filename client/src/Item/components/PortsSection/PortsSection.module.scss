@@ -1,0 +1,66 @@
+.portsSection {
+  margin: 16px 0;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+
+  .anticon {
+    color: #1890ff;
+    font-size: 14px;
+  }
+}
+
+.sectionTitle {
+  font-weight: 600;
+  color: #262626;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.portsGrid {
+  margin-top: 8px;
+}
+
+.portItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 0;
+
+  &:not(:last-child) {
+    border-bottom: 1px solid #f0f0f0;
+  }
+}
+
+.portTag {
+  min-width: 100px;
+  text-align: center;
+  font-weight: 500;
+  font-size: 12px;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.portList {
+  font-size: 13px;
+  color: #595959;
+  line-height: 1.4;
+  flex: 1;
+}
+
+/* === Адаптивность === */
+@media (max-width: 768px) {
+  .portItem {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .portTag {
+    align-self: flex-start;
+  }
+}
