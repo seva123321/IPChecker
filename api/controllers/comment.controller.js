@@ -10,7 +10,7 @@ import {
   sequelize,
   Priority,
   PriorityComment,
-  Grouping
+  Grouping,
 } from "../models/index.js";
 
 export const getIpInfo = async (req, res) => {
@@ -27,15 +27,15 @@ export const getIpInfo = async (req, res) => {
       include: [
         {
           model: Priority,
-          attributes: ["name"]
-        }
-      ]
+          attributes: ["name"],
+        },
+      ],
     });
 
     if (!priorityComment) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         message: "Комментарий не найден",
-        comment: null 
+        comment: null,
       });
     }
 
@@ -43,10 +43,10 @@ export const getIpInfo = async (req, res) => {
       host_id: priorityComment.host_id,
       priority: {
         id: priorityComment.priority_id,
-        name: priorityComment.Priority?.name || null
+        name: priorityComment.Priority?.name || null,
       },
       comment: priorityComment.comment,
-      created_at: priorityComment.created_at
+      created_at: priorityComment.created_at,
     });
   } catch (error) {
     console.error("Ошибка в getIpInfo:", error);
@@ -85,10 +85,10 @@ export const postIpInfo = async (req, res) => {
     }
 
     // Создаем или обновляем комментарий
-    if (comment !== undefined && comment !== null && comment.trim() !== '') {
+    if (comment !== undefined && comment !== null && comment.trim() !== "") {
       // Проверяем, существует ли уже комментарий для этого хоста
       let priorityComment = await PriorityComment.findOne({
-        where: { host_id: hostId }
+        where: { host_id: hostId },
       });
 
       if (priorityComment) {
@@ -102,21 +102,21 @@ export const postIpInfo = async (req, res) => {
         await PriorityComment.create({
           host_id: hostId,
           priority_id: priority_id || host.priority_id,
-          comment: comment.trim()
+          comment: comment.trim(),
         });
       }
-    } else if (comment !== undefined && comment.trim() === '') {
+    } else if (comment !== undefined && comment.trim() === "") {
       // Удаляем комментарий, если он был пустым
       await PriorityComment.destroy({
-        where: { host_id: hostId }
+        where: { host_id: hostId },
       });
     }
 
-    return res.json({ 
+    return res.json({
       message: "Данные успешно обновлены",
       host_id: hostId,
       priority_id: host.priority_id,
-      comment: comment ? comment.trim() : null
+      comment: comment ? comment.trim() : null,
     });
   } catch (error) {
     console.error("Ошибка в postIpInfo:", error);
@@ -128,7 +128,7 @@ export const postIpInfo = async (req, res) => {
 export const patchIpInfo = async (req, res) => {
   try {
     // Получаем параметры из body
-    const { id: hostId, priority_id, comment } = req.body;
+    const { id: hostId, priority_id, grouping_id, comment } = req.body;
 
     if (!hostId) {
       return res.status(400).json({ error: "Параметр 'id' обязателен" });
@@ -148,23 +148,36 @@ export const patchIpInfo = async (req, res) => {
       }
     }
 
+    // Проверяем, существует ли группа, если указана
+    if (grouping_id) {
+      const grouping = await Grouping.findByPk(grouping_id);
+      if (!grouping) {
+        return res.status(404).json({ error: "Группа не найдена" });
+      }
+    }
+
     // Обновляем приоритет хоста только если он передан
     if (priority_id !== undefined) {
       host.priority_id = priority_id;
       await host.save();
     }
 
+    if (grouping_id !== undefined) {
+      host.grouping_id = grouping_id;
+      await host.save();
+    }
+
     // Создаем или обновляем комментарий только если он передан
     if (comment !== undefined) {
-      if (comment === null || comment.trim() === '') {
+      if (comment === null || comment.trim() === "") {
         // Удаляем комментарий, если он был пустым
         await PriorityComment.destroy({
-          where: { host_id: hostId }
+          where: { host_id: hostId },
         });
       } else {
         // Проверяем, существует ли уже комментарий для этого хоста
         let priorityComment = await PriorityComment.findOne({
-          where: { host_id: hostId }
+          where: { host_id: hostId },
         });
 
         if (priorityComment) {
@@ -178,17 +191,23 @@ export const patchIpInfo = async (req, res) => {
           await PriorityComment.create({
             host_id: hostId,
             priority_id: priority_id || host.priority_id,
-            comment: comment.trim()
+            comment: comment.trim(),
           });
         }
       }
     }
 
-    return res.json({ 
+    return res.json({
       message: "Данные успешно обновлены",
       host_id: hostId,
       priority_id: host.priority_id,
-      comment: comment !== undefined ? (comment === null || comment.trim() === '' ? null : comment.trim()) : null
+      grouping_id: host.grouping_id,
+      comment:
+        comment !== undefined
+          ? comment === null || comment.trim() === ""
+            ? null
+            : comment.trim()
+          : null,
     });
   } catch (error) {
     console.error("Ошибка в patchIpInfo:", error);
