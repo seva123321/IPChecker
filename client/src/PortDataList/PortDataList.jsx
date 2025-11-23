@@ -14,7 +14,8 @@ export const PortDataList = ({
     //   const match = inputValue.match(/^\d+\s+\(([^)]+)\)$/)
     //   const name = match ? match[1] : inputValue
 
-      await service.postData('ports', inputValue)
+    console.log('Sending data to server:', inputValue)
+    //   await service.postData('data/comment', inputValue)
       fetchData() // Обновляем список после успешной отправки
       // Сбрасываем состояние в родительском компоненте
       if (onKeywordChange) {
