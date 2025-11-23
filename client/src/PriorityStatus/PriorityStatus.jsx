@@ -1,95 +1,114 @@
-import React, { useState } from 'react'
-import classNames from 'classnames'
-import cn from './PriorityStatus.module.scss'
-import { Modal, Select, Input, Button } from 'antd'
+import { Modal } from 'antd'
+import { usePriorityStatus } from './hooks/usePriorityStatus'
+import { StatusDisplay } from './components/StatusDisplay'
+import { SelectStep } from './components/SelectStep'
+import { ConfirmStep } from './components/ConfirmStep'
 
-const PriorityStatus = ({ priority, onUpdate }) => {
-  const [isModalOpen, setIsModalOpen] = useState(false)
-  const [currentStep, setCurrentStep] = useState('select')
-  const [newPriority, setNewPriority] = useState(
-    priority?.id ? priority?.id?.toString() : '' //@TODO   priority.id ? priority.id.toString() : ''
-  )
-  const [comment, setComment] = useState('')
+const PriorityStatus = ({ priority, grouping, hostId, onUpdate }) => {
+  const {
+    state,
+    updateState,
+    handleFetchGroupingOptions,
+    handleModalOpen,
+    handleNextStep,
+    handleCancel,
+    handleSubmit,
+  } = usePriorityStatus({ priority, grouping, hostId, onUpdate })
 
-  const handleNextStep = () => {
-    setCurrentStep('confirm')
+  // Вспомогательные функции
+  const getGroupingDisplayValue = () => {
+    if (!state.newGrouping.id && !state.newGrouping.name) return undefined
+    if (state.newGrouping.name) return state.newGrouping.name
+
+    const foundOption = state.groupingOptions.find(
+      (option) => option.value === state.newGrouping.id.toString()
+    )
+    return foundOption ? foundOption.label : state.newGrouping.id.toString()
   }
 
-  const handleCancel = () => {
-    setIsModalOpen(false)
-    setCurrentStep('select')
+  const getGroupingSelectValue = () => {
+    if (!state.newGrouping.id) return undefined
+
+    // Сначала ищем в загруженных опциях
+    const currentOption = state.groupingOptions.find(
+      (option) => option.value === state.newGrouping.id.toString()
+    )
+
+    if (currentOption) {
+      return { value: currentOption.value, label: currentOption.label }
+    }
+
+    // Если опции еще не загружены, но у нас есть имя группировки из пропсов
+    if (state.newGrouping.name && !state.optionsLoaded) {
+      return {
+        value: state.newGrouping.id.toString(),
+        label: state.newGrouping.name,
+      }
+    }
+
+    // Если ничего не нашли, возвращаем просто ID
+    return state.newGrouping.id.toString()
   }
 
-  const handleSubmit = async () => {
-    onUpdate(newPriority, comment)
-    setIsModalOpen(false)
-    setCurrentStep('select')
+  // Обработчики
+  const handlePriorityChange = (value) => updateState({ newPriority: value })
+
+  const handleGroupingChange = (value) => {
+    const selectedValue = typeof value === 'object' ? value.value : value
+    const selectedOption = state.groupingOptions.find(
+      (opt) => opt.value === selectedValue
+    )
+    updateState({
+      newGrouping: selectedOption || { id: selectedValue, name: selectedValue },
+    })
   }
 
-  const handleModalOpen = ()=> {
-    setIsModalOpen(true)
-    //@TODO get comment
-  }
+  const handleCommentChange = (e) => updateState({ comment: e.target.value })
+  const handleBack = () => updateState({ currentStep: 'select' })
 
   return (
     <>
-      {priority && (
-        <span
-          className={classNames(cn.statusPriority, {
-            [cn.usual]: priority.id === 1,
-            [cn.interesting]: priority.id === 2,
-            [cn.important]: priority.id === 3,
-          })}
-          title={'Статус'}
-          onClick={handleModalOpen}
-        >
-          {priority.name}
-        </span>
-      )}
+      <StatusDisplay
+        priority={priority}
+        grouping={grouping}
+        onOpenModal={handleModalOpen}
+      />
+
       <Modal
-        open={isModalOpen}
+        open={state.isModalOpen}
         onCancel={handleCancel}
-        footer={null} // Убираем стандартные кнопки
+        footer={null}
+        width={500}
+        confirmLoading={state.loading}
+        style={{ top: 20 }}
       >
-        {currentStep === 'select' && (
-          <>
-            <h2>Обновление статуса</h2>
-            <Select
-              value={newPriority}
-              onChange={(value) => setNewPriority(value)}
-              placeholder="Выберите приоритет"
-              className={cn.fixedWidthSelect}
-              defaultValue={priority ? priority?.id?.toString() : ''}
-            >
-              <Select.Option value="1">Обычный</Select.Option>
-              <Select.Option value="2">Интересный</Select.Option>
-              <Select.Option value="3">Важный</Select.Option>
-            </Select>
-            <Input.TextArea
-              placeholder="Комментарий"
-              value={comment}
-              rows="5"
-              onChange={(e) => setComment(e.target.value)}
-            />
-            <div style={{ marginTop: '20px', textAlign: 'right' }}>
-              <Button onClick={handleCancel}>Закрыть</Button>
-              <Button type="primary" onClick={handleNextStep}>
-                Далее
-              </Button>
-            </div>
-          </>
+        {state.currentStep === 'select' && (
+          <SelectStep
+            newPriority={state.newPriority}
+            onPriorityChange={handlePriorityChange}
+            groupingSelectValue={getGroupingSelectValue()}
+            onGroupingChange={handleGroupingChange}
+            onFocusGrouping={handleFetchGroupingOptions}
+            groupingOptions={state.groupingOptions}
+            comment={state.comment}
+            onCommentChange={handleCommentChange}
+            existingComment={state.existingComment}
+            onCancel={handleCancel}
+            onNext={handleNextStep}
+            loading={state.loading}
+          />
         )}
-        {currentStep === 'confirm' && (
-          <>
-            <h2>Подтверждение обновления статуса</h2>
-            <p>Вы уверены, что хотите обновить статус?</p>
-            <div style={{ marginTop: '20px', textAlign: 'right' }}>
-              <Button onClick={handleCancel}>Отмена</Button>
-              <Button type="primary" onClick={handleSubmit}>
-                Подтвердить
-              </Button>
-            </div>
-          </>
+
+        {state.currentStep === 'confirm' && (
+          <ConfirmStep
+            newPriority={state.newPriority}
+            groupingDisplayValue={getGroupingDisplayValue()}
+            comment={state.comment}
+            onBack={handleBack}
+            onCancel={handleCancel}
+            onSubmit={handleSubmit}
+            loading={state.loading}
+          />
         )}
       </Modal>
     </>
