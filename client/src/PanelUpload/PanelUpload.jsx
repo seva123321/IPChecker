@@ -1,14 +1,10 @@
-// components/PanelUpload.jsx
-import React, { useState } from 'react'
-import { Upload, Tabs, message } from 'antd'
+import { useState } from 'react'
+import { Tabs } from 'antd'
 import cn from './PanelUpload.module.scss'
 
 // Импортируем специализированные компоненты
 import { UploadArea } from './UploadArea'
 import { ExportButton } from '../ExportButton/ExportButton'
-
-const { Dragger } = Upload
-// const { TabPane } = Tabs // Убрано, так как используем items
 
 export function PanelUpload({ service }) {
   const [activeTab, setActiveTab] = useState('ip') // 'ip', 'json', 'export'
