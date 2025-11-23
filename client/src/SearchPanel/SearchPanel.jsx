@@ -21,7 +21,7 @@ const defaultInputValues = {
   isWhois: true,
 }
 
-export const SearchPanel = ({ service }) => {
+ const SearchPanel = ({ service }) => {
   const [searchValue, setSearchValue] = useState(defaultInputValues)
   const [dateRange, setDateRange] = useState(initialDateRange)
 
@@ -264,6 +264,8 @@ export const SearchPanel = ({ service }) => {
     </div>
   )
 }
+
+export default SearchPanel
 
 // рабочий код без запроса
 /************************************* */

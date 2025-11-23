@@ -2,6 +2,13 @@
   margin: 32px 16px;
 }
 
+.tabsWrapper {
+  background-color: #fff;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  padding: 16px;
+}
+
 .itemsGrid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -9,21 +16,18 @@
   max-width: 1400px;
   margin: 0 auto;
   margin-top: 16px;
-
   /* Адаптив: 1 колонка на мобильных */
   @media (max-width: 900px) {
     grid-template-columns: 1fr;
     gap: 20px;
     padding: 0 16px;
   }
-
   & > ul {
     list-style: none;
     padding: 0;
     margin: 0;
     display: contents;
   }
-
   & > ul > li {
     display: contents;
   }
@@ -38,7 +42,6 @@
   text-align: center;
   font-size: 24px;
 }
-
 /* Адаптив: 1 колонка на мобильных */
 @media (max-width: 900px) {
   .itemsGrid {
@@ -53,11 +56,9 @@
   gap: 24px;
   padding: 0 20px;
   margin-bottom: 32px;
-
   & > h1 {
     color: #262626;
   }
-
   /* Важно: ограничить высоту, если нужно */
   /* Например: max-height: 600px; */
   @media (max-width: 900px) {
@@ -77,7 +78,6 @@
 .header {
   display: flex;
   justify-content: space-between;
-
   & > span {
     font-size: 24px;
     font-weight: 600;
@@ -107,4 +107,3 @@
     cursor: not-allowed;
   }
 }
-

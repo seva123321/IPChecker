@@ -1,3 +1,7 @@
+import dayjs from "dayjs";
+
+export const initialDateRange = [dayjs().month(0).date(1), dayjs()];
+
 export const itemsMock = [
   {
     ipAddress: '74.125.143.95',
