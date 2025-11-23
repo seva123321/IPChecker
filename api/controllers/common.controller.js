@@ -1,12 +1,8 @@
 import {
-  Host,
-  Port,
-  Whois,
   WhoisKey,
   WellKnownPort,
   sequelize,
   Priority,
-  PriorityComment,
   Grouping,
 } from "../models/index.js";
 
@@ -18,10 +14,10 @@ export const definingTableType = (req, res) => {
       getPortTable(req, res);
       break;
     case "portsOpened":
-      getPortOneTypeOfTable(req, res, 'open');
+      getPortOneTypeOfTable(req, res, "open");
       break;
     case "portsFiltered":
-      getPortOneTypeOfTable(req, res, 'filtered');
+      getPortOneTypeOfTable(req, res, "filtered");
       break;
     case "priority":
       getPriorityTable(req, res);
@@ -29,7 +25,9 @@ export const definingTableType = (req, res) => {
     case "group":
       getGroupTable(req, res);
       break;
-
+    case "keywords":
+      getKeywordsTable(req, res);
+      break;
     default:
       break;
   }
@@ -58,18 +56,23 @@ export const getPortTable = async (req, res) => {
 
 export const getPortOneTypeOfTable = async (req, res, type) => {
   try {
-    const [portsOpened] = await sequelize.query(`
+    const [portsOpened] = await sequelize.query(
+      `
       SELECT DISTINCT wp.port, wp.name
       FROM well_known_ports wp
       JOIN ports p ON wp.port = p.port
       WHERE p.type = :type
       ORDER BY wp.port ASC;
-    `, {
-      replacements: { type },
-    });
+    `,
+      {
+        replacements: { type },
+      }
+    );
 
     if (portsOpened.length === 0) {
-      return res.status(404).json({ error: "Нет результатов удовлетворяющих поиску" });
+      return res
+        .status(404)
+        .json({ error: "Нет результатов удовлетворяющих поиску" });
     }
 
     const data = portsOpened.map((item) => ({
@@ -113,6 +116,25 @@ export const getGroupTable = async (req, res) => {
     const data = groupsData.map((item) => ({
       id: item.id,
       name: item.name,
+    }));
+    return res.json({ data });
+  } catch (error) {
+    console.error("Ошибка в getGroupTable:", error);
+    return res
+      .status(500)
+      .json({ error: "Нет результатов удовлетворяющих поиску" });
+  }
+};
+
+export const getKeywordsTable = async (req, res) => {
+  try {
+    const whoisData = await WhoisKey.findAll({
+      attributes: ["id", "key_name"],
+    });
+
+    const data = whoisData.map((item) => ({
+      id: item.id,
+      name: item.key_name,
     }));
     return res.json({ data });
   } catch (error) {
