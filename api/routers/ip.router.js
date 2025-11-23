@@ -1,5 +1,5 @@
 import express from "express";
-import { getIpInfo, groupIp } from "../controllers/ip.controller.js";
+import { getIpInfo } from "../controllers/ip.controller.js";
 
 const router = express.Router();
 
