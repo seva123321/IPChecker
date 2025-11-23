@@ -33,7 +33,11 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   /* background: linear-gradient(135deg, var(--primary-dark) 0%); */
-  background: linear-gradient(135deg, var(--primary-dark) 0%, var(--secondary-dark) 100%);
+  background: linear-gradient(
+    135deg,
+    var(--primary-dark) 0%,
+    var(--secondary-dark) 100%
+  );
 }
 
 #root {
@@ -52,4 +56,12 @@ body {
 
 li {
   list-style: none;
+}
+
+.border {
+  border: 1px solid var(--accent-blue-dark);
+}
+
+.ant-select-selection-wrap {
+  height: inherit;
 }
