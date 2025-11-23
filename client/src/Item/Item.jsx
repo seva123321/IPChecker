@@ -1,222 +1,81 @@
-import React, { useState } from 'react'
-
+import { Badge, Card, Divider } from 'antd'
+import classNames from 'classnames'
+import { useItemData } from './hooks/useItemData'
+import { ItemHeader } from './components/ItemHeader/ItemHeader'
+import { PortsSection } from './components/PortsSection/PortsSection'
+import { WhoisSection } from './components/WhoisSection/WhoisSection'
+// import { CommentSection } from './components/CommentSection/CommentSection'
 import cn from './Item.module.scss'
 
-const renderPortsData = (data) => {
-  return data
-    .sort((a, b) => a.port - b.port)
-    .map((item) => `${item.port} (${item.name})`)
-    .join(', ')
-}
-
-export function Item({ item }) {
+export const Item = ({ item }) => {
   const {
+    currentItem,
+    isWhoisOpen,
+    whois,
+    handlePriorityStatusUpdate,
+    handleClickWhois,
+    formatDate,
+  } = useItemData(item)
+
+  const {
+    id: hostId,
     ip,
     port_data: portData,
-    whois,
     country,
     updated_at: updatedAt,
     reachable,
     has_whois: hasWhois,
-  } = item
+    priority_info: priorityInfo = {},
+  } = currentItem
 
-  const [isWhoisOpen, setIsWhoisOpen] = useState(false)
-
-  // Определяем, есть ли валидные Whois-данные (не ошибка)
-  const isValidWhois = whois
-  !whois.error && typeof whois === 'object' && Object.keys(whois).length > 0
-
-  const whoisCount = isValidWhois ? Object.keys(whois).length : 0
-
+  const { comment, grouping, priority } = priorityInfo
   const openPorts = portData?.open || []
   const filteredPorts = portData?.filtered || []
 
+  const cardPriorityClasses = priority
+    ? classNames(cn.ipItem, {
+        [cn.usual]: priority.id === 1,
+        [cn.interesting]: priority.id === 2,
+        [cn.important]: priority.id === 3,
+      })
+    : cn.ipItem
+
   return (
-    <div className={`${cn.ipItem}${isValidWhois ? ` ${cn.highlighted}` : ''}`}>
-      {/* Заголовок IP */}
-      <div className={cn.ipHeader}>
-        <div className={cn.ipAddressContainer}>
-          <div>
-            <span className={cn.ipAddress}>{ip}</span>
-            &nbsp;{country ?? whois?.country ?? whois?.Country}
-          </div>
-        </div>
-      </div>
-      <div className={cn.statusWrapper}>
-        <span className={reachable ? cn.statusReachable : cn.statusUnreachable}>
-          {reachable ? 'Доступен' : 'Недоступен'}
-        </span>
-        {isValidWhois && whoisCount > 1 && (
-          <span
-            className={cn.statusReachable}
-            title={`Есть данные (${whoisCount} строк)`}
-          >
-            Есть данные whois
-          </span>
-        )}
-      </div>
+    <Badge.Ribbon
+      text={reachable ? '✅ Доступен' : '❌ Недоступен'}
+      color={reachable ? 'green' : 'red'}
+      placement="start"
+      style={{
+        top: '-6px',
+        fontSize: '12px',
+        fontWeight: '500',
+      }}
+    >
+      <Card className={cardPriorityClasses} size="small">
+        <ItemHeader
+          ip={ip}
+          country={country}
+          updatedAt={updatedAt}
+          priority={priority}
+          grouping={grouping}
+          hostId={hostId}
+          onUpdate={handlePriorityStatusUpdate}
+          formatDate={formatDate}
+        />
 
-      {/* Порты */}
-      <div className={cn.portsSection}>
-        <div className={cn.portsTitle}>Порты:</div>
-        <div className={cn.portsList}>
-          <strong>Открытые порты:</strong>&nbsp;
-          {openPorts.length > 0 ? renderPortsData(openPorts) : 'Нет'}
-        </div>
-        <div className={cn.portsList}>
-          <strong>Фильтрованные порты:</strong>&nbsp;
-          {filteredPorts.length > 0 ? renderPortsData(filteredPorts) : 'Нет'}
-        </div>
-      </div>
+        <Divider style={{ margin: '12px 0' }} />
 
-      {/* Время обновления */}
-      {updatedAt && (
-        <div className={cn.updateTime}>Обновлено:&nbsp;{updatedAt}</div>
-      )}
-      
-      {/* Whois */}
-      {isValidWhois && whoisCount >= 1 && (
-        <>
-          <button
-            className={cn.whoisToggle}
-            onClick={() => setIsWhoisOpen(!isWhoisOpen)}
-          >
-            {isWhoisOpen ? 'Скрыть Whois' : 'Показать Whois'}
-          </button>
-          {isWhoisOpen && (
-            <div className={cn.whoisInfo}>
-              <ul>
-                {Object.entries(whois).map(([key, value]) => (
-                  <li key={key}>
-                    <span className={cn.whoisKey}>{key}:</span> {String(value)}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </>
-      )}
+        <PortsSection openPorts={openPorts} filteredPorts={filteredPorts} />
 
-      {/* Если whois есть, но с ошибкой — можно показать уведомление (опционально) */}
-      {!isValidWhois && hasWhois && whois?.error && (
-        <div className={cn.whoisError}>
-          Whois недоступен:
-          {whois.error}
-        </div>
-      )}
-    </div>
+        {/* <CommentSection comment={comment} /> */}
+
+        <WhoisSection
+          hasWhois={hasWhois}
+          isWhoisOpen={isWhoisOpen}
+          whois={whois}
+          onToggleWhois={() => handleClickWhois(hostId)}
+        />
+      </Card>
+    </Badge.Ribbon>
   )
 }
-// import React, { useState } from 'react'
-
-// import cn from './Item.module.scss'
-
-// const renderPortsData = (data) => {
-//   return data
-//     .sort((a, b) => a.port - b.port)
-//     .map((item) => `${item.port} (${item.name})`)
-//     .join(', ')
-// }
-
-// export function Item({ item }) {
-//   const {
-//     ip,
-//     port_data: portData,
-//     whois,
-//     country,
-//     updated_at: updatedAt,
-//     reachable,
-//     has_whois: hasWhois,
-//   } = item
-
-//   const [isWhoisOpen, setIsWhoisOpen] = useState(false)
-
-//   // Определяем, есть ли валидные Whois-данные (не ошибка)
-//   const isValidWhois = whois
-//   !whois.error && typeof whois === 'object' && Object.keys(whois).length > 0
-//   const whoisCount = isValidWhois ? Object.keys(whois).length : 0
-
-//   const openPorts = portData?.open || []
-//   const filteredPorts = portData?.filtered || []
-
-//   return (
-//     <div className={`${cn.ipItem}${isValidWhois ? ` ${cn.highlighted}` : ''}`}>
-//       {/* Заголовок IP */}
-//       <div className={cn.ipHeader}>
-//         <div className={cn.ipAddressContainer}>
-//           <div>
-//             <span className={cn.ipAddress}>{ip}</span>
-//             &nbsp;{country ?? whois?.country ?? whois?.Country}
-//           </div>
-//         </div>
-//       </div>
-//         <div className={cn.statusWrapper}>
-//           <span
-//             className={reachable ? cn.statusReachable : cn.statusUnreachable}
-//           >
-//             {reachable ? 'Доступен' : 'Недоступен'}
-//           </span>
-//           {isValidWhois && whoisCount > 1 && (
-//             <span
-//               className={cn.statusReachable}
-//               title={`Есть данные (${whoisCount} строк)`}
-//             >
-//               Есть данные whois
-//             </span>
-//           )}
-//         </div>
-
-//       {/* Порты */}
-//       <div className={cn.portsSection}>
-//         <div className={cn.portsTitle}>Порты:</div>
-//         <div className={cn.portsList}>
-//           <strong>Открытые порты:</strong>&nbsp;
-//           {openPorts.length > 0 ? renderPortsData(openPorts) : 'Нет'}
-//         </div>
-//         <div className={cn.portsList}>
-//           <strong>Фильтрованные порты:</strong>&nbsp;
-//           {filteredPorts.length > 0 ? renderPortsData(filteredPorts) : 'Нет'}
-//         </div>
-//       </div>
-
-//       {/* Время обновления */}
-//       {updatedAt && (
-//         <div className={cn.updateTime}>Обновлено:&nbsp;{updatedAt}</div>
-//       )}
-
-//       {/* Страна (если будет не null) */}
-//       {country && <span className={cn.ipCountry}>{country}</span>}
-
-//       {/* Whois */}
-//       {isValidWhois && (
-//         <>
-//           <button
-//             className={cn.whoisToggle}
-//             onClick={() => setIsWhoisOpen(!isWhoisOpen)}
-//           >
-//             {isWhoisOpen ? 'Скрыть Whois' : 'Показать Whois'}
-//           </button>
-//           {isWhoisOpen && (
-//             <div className={cn.whoisInfo}>
-//               <ul>
-//                 {Object.entries(whois).map(([key, value]) => (
-//                   <li key={key}>
-//                     <span className={cn.whoisKey}>{key}:</span> {String(value)}
-//                   </li>
-//                 ))}
-//               </ul>
-//             </div>
-//           )}
-//         </>
-//       )}
-
-//       {/* Если whois есть, но с ошибкой — можно показать уведомление (опционально) */}
-//       {!isValidWhois && hasWhois && whois?.error && (
-//         <div className={cn.whoisError}>
-//           Whois недоступен:
-//           {whois.error}
-//         </div>
-//       )}
-//     </div>
-//   )
-// }
