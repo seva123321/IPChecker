@@ -1,25 +1,68 @@
-import React from 'react'
 import withInfiniteScroll from './hoc/withInfiniteScroll'
 
-const InfiniteList = ({ items, render, loadMoreData, hasMore }) => {
+const InfiniteList = ({ items, render, hasMore }) => {
   return (
     <>
       {items.map((item, index) => (
         <div key={index}>{render(item)}</div>
       ))}
-      {!hasMore && <div>Нет больше данных</div>}
+      {!hasMore && items.length > 0 && (
+        <div
+          style={{
+            textAlign: 'center',
+            padding: '20px',
+            color: '#8c8c8c',
+            borderTop: '1px solid #f0f0f0',
+            marginTop: '20px',
+          }}
+        >
+          Все данные загружены
+        </div>
+      )}
     </>
-  );
-};
+  )
+}
 
-export default withInfiniteScroll(InfiniteList);
+export default withInfiniteScroll(InfiniteList)
 
-// import { withInfiniteScroll } from './hoc/withInfiniteScroll'
-// // import { MainPageInfinite } from './MainPageInfinite'
-// import { MainPage } from './MainPage'
+// import withInfiniteScroll from './hoc/withInfiniteScroll'
 
-// // Обертка для MainPage с бесконечной прокруткой
-// export const MainPageInfiniteWithScroll = withInfiniteScroll(
-//   MainPage,
-//   'items'
-// )
+// const InfiniteList = ({ items, render, hasMore, isLoading }) => {
+//   return (
+//     <>
+//       {items.map((item, index) => (
+//         <div key={item.id || index}>{render(item)}</div>
+//       ))}
+
+//       {/* Показываем индикатор загрузки */}
+//       {isLoading && (
+//         <div
+//           style={{
+//             textAlign: 'center',
+//             padding: '20px',
+//             color: '#8c8c8c',
+//           }}
+//         >
+//           Загрузка...
+//         </div>
+//       )}
+
+//       {/* Сообщение когда данные закончились */}
+//       {!hasMore && items.length > 0 && (
+//         <div
+//           style={{
+//             textAlign: 'center',
+//             padding: '20px',
+//             color: '#8c8c8c',
+//             borderTop: '1px solid #f0f0f0',
+//             marginTop: '20px',
+//           }}
+//         >
+//           Все данные загружены
+//         </div>
+//       )}
+//     </>
+//   )
+// }
+
+// export default withInfiniteScroll(InfiniteList)
