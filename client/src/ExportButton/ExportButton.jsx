@@ -3,10 +3,11 @@ import { Button, Dropdown, Menu, Modal, Space, message } from 'antd'
 import { DownloadOutlined, DownOutlined } from '@ant-design/icons'
 import DatePicker from '../DatePicker/DatePicker' 
 import cn from './ExportButton.module.scss'
+import { initialDateRange } from '../utils/constant'
 
 export const ExportButton = ({ service }) => {
   const [isModalVisible, setIsModalVisible] = useState(false)
-  const [dateRange, setDateRange] = useState(null) 
+  const [dateRange, setDateRange] = useState(initialDateRange)
   const [loading, setLoading] = useState(false)
 
   const handleExport = async (type, params = {}) => {
@@ -119,6 +120,7 @@ export const ExportButton = ({ service }) => {
       </Dropdown>
 
       <Modal
+        style={{textAlign:'center'}}
         title="Экспорт по выбранным датам"
         open={isModalVisible}
         onOk={handleOk}
