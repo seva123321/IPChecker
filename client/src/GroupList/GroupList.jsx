@@ -1,3 +1,4 @@
+// GroupList.jsx
 import { List } from '../List'
 import { Item } from '../Item/Item'
 import cn from './GroupList.module.scss'
@@ -7,7 +8,6 @@ import { useState, useEffect } from 'react'
 export const GroupList = ({ data, service, currentEndpoint }) => {
   // Используем состояние для хранения данных с пагинацией
   const [paginatedData, setPaginatedData] = useState([])
-  // const [currentPage, setCurrentPage] = useState(1)
   const [loading, setLoading] = useState(false)
 
   // Функция для загрузки дополнительных данных
@@ -38,7 +38,7 @@ export const GroupList = ({ data, service, currentEndpoint }) => {
           // Объединяем данные по IP (убираем дубликаты)
           const allItems = [
             ...existingItem.items,
-            ...(response.data.items[0]?.items || []),
+            ...(response.items[0]?.items || []),
           ]
           const uniqueItems = allItems.filter(
             (item, index, self) =>
@@ -50,16 +50,15 @@ export const GroupList = ({ data, service, currentEndpoint }) => {
             ...existingItem,
             items: uniqueItems,
             pagination:
-              response.data.items[0]?.pagination || existingItem.pagination,
+              response.items[0]?.pagination || existingItem.pagination,
           }
 
           return updatedItems
         } else {
           // Если элемент не найден, добавляем новый
-          return [...prevData, ...response.data.items]
+          return [...prevData, ...response.items]
         }
       })
-      // setCurrentPage((prevPage) => prevPage + 1)
     } catch (error) {
       console.error(`Error fetching grouped report for ${endpoint}s:`, error)
     } finally {
@@ -83,7 +82,6 @@ export const GroupList = ({ data, service, currentEndpoint }) => {
           },
         }))
       )
-      // setCurrentPage(1)
     }
   }, [data])
 
@@ -134,7 +132,7 @@ export const GroupList = ({ data, service, currentEndpoint }) => {
               }
               loading={loading} // Добавляем состояние загрузки
             >
-              Еще 10
+              Показать еще
             </Button>
           )}
         </div>
@@ -142,109 +140,3 @@ export const GroupList = ({ data, service, currentEndpoint }) => {
     </>
   )
 }
-
-// import { List } from '../List'
-// import { Item } from '../Item/Item'
-// import cn from './GroupList.module.scss'
-// import { Button } from '../Button/Button'
-// import { useState, useEffect } from 'react'
-
-// export const GroupList = ({ data, service, currentEndpoint }) => {
-//   const [dataMore, setDataMore] = useState(null)
-//   const [currentPage, setCurrentPage] = useState(1)
-
-//   const handleMore = async (endpoint, param) => {
-//     console.log('param > ', param)
-//     try {
-//       const response = await service.getData(`${endpoint + 's'}/group`, {
-//         [endpoint]: param,
-//         page: currentPage + 1,
-//         limit: 10,
-//       })
-//       setDataMore((prevData) => {
-//         const oldData = prevData.filter(
-//           (item) => item.port === param || item.keyword === param
-//         )
-//         const newData = [...oldData, ...response.data.items]
-//         // if (oldData.length) {
-//           console.log('newData > ', newData)
-//         // }
-//         return [...prevData, ...response.data.items]
-//       })
-//       setCurrentPage((prevPage) => prevPage + 1)
-//     } catch (error) {
-//       console.error(
-//         `Error fetching grouped report for ${endpoint + 's'}:`,
-//         error
-//       )
-//     }
-//   }
-
-//   useEffect(() => {
-//     if (!dataMore && data?.items.length) {
-//       setDataMore(data.items)
-//     }
-//   }, [data])
-
-//   console.log(dataMore)
-
-//   return (
-//     <>
-//       {dataMore?.map((itemData, index) => (
-//         <div key={index} className={cn.listGroup}>
-//           <div className={cn.groupHeaderWrapper}>
-//             <div className={cn.groupHeader}>
-//               <span>{itemData.name}</span>&nbsp;
-//               <span>
-//                 {itemData.name
-//                   ? `(порт ${itemData[data.field]})`
-//                   : `${itemData[data.field]}`}
-//               </span>
-//             </div>
-//             <span>{`Всего: ${itemData.pagination.totalItems}`}</span>
-//           </div>
-//           <List
-//             items={itemData.items}
-//             render={(item) => <Item item={item} />}
-//           />
-//           {
-//             <Button
-//               onClick={() =>
-//                 handleMore(currentEndpoint, itemData.keyword ?? itemData.port)
-//               }
-//             >
-//               Еще 10
-//             </Button>
-//           }
-//         </div>
-//       ))}
-//     </>
-//   )
-// }
-
-// import { List } from '../List'
-// import { Item } from '../Item/Item'
-// import cn from './GroupList.module.scss'
-// import { Button } from '../Button/Button'
-
-// export const GroupList = ({ data }) => {
-//   const [dataMore, setDataMore] =
-
-//   return data.items.map((itemData) => (
-//     <div key={itemData[data.field]} className={cn.listGroup}>
-//       <div className={cn.groupHeaderWrapper}>
-//         <div className={cn.groupHeader}>
-//           <span>{itemData.name}</span>&nbsp;
-//           <span>
-//             {itemData.name
-//               ? `(порт ${itemData[data.field]})`
-//               : `${itemData[data.field]}`}
-//           </span>
-//         </div>
-//         <span>{`Всего: ${itemData.pagination.totalItems}`}</span>
-//       </div>
-
-//       <List items={itemData.items} render={(item) => <Item item={item} />} />
-//     </div>
-//   ))
-// }
