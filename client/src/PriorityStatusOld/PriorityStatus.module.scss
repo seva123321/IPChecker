@@ -1,0 +1,100 @@
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.modalContent {
+  background: white;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+  width: 80%;
+  max-width: 400px;
+}
+
+.statusWrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.selectWrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  // Стили для контейнера Select чтобы dropdown отображался корректно
+  :global(.ant-select) {
+    position: relative;
+  }
+}
+
+.statusPriority {
+  background: #d4edda;
+  text-align: center;
+  color: #155724;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  align-self: end;
+  width: fit-content;
+  cursor: pointer;
+  transition: 0.3s;
+}
+
+.fixedWidthSelectPriority {
+  width: 180px;
+}
+
+.fixedWidthSelectGrouping {
+  width: 100%;
+  min-width: 200px;
+
+  // Обеспечиваем что dropdown будет поверх модального окна
+  :global(.ant-select-dropdown) {
+    z-index: 1050;
+  }
+}
+
+.usual {
+  &:hover {
+    border: 1px solid #82ee9b;
+  }
+}
+
+.interesting {
+  background-color: #ffce61;
+  &:hover {
+    border: 1px solid #f5b11f;
+  }
+}
+
+.important {
+  background-color: #ff6f61;
+  &:hover {
+    border: 1px solid #f73524;
+  }
+}
+
+.statusReachable {
+  background: #d4edda;
+  text-align: center;
+  color: #155724;
+  cursor: pointer;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+
+  &:hover {
+    border: 1px solid #82ee9b;
+  }
+}
