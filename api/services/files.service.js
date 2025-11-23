@@ -338,6 +338,7 @@ export default class FileService {
         }
 
         return {
+          id: host.id,
           ip: host.ip,
           country: whois.Country || null,
           has_whois: hasWhois,
@@ -426,6 +427,7 @@ export default class FileService {
         }
 
         return {
+          id: host.id,
           ip: host.ip,
           country: whois.Country || null,
           has_whois: hasWhois,
