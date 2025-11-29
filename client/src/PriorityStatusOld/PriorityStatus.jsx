@@ -78,8 +78,8 @@ const PriorityStatus = ({ priority, grouping, hostId, onUpdate }) => {
           setComment(commentData.comment)
         }
       } catch (error) {
-        console.error('Ошибка получения комментария:', error)
-        message.error('Не удалось загрузить существующий комментарий')
+        // console.error('Ошибка получения комментария:', error)
+        // message.error('Не удалось загрузить существующий комментарий')
         setExistingComment({})
         setComment('')
       }

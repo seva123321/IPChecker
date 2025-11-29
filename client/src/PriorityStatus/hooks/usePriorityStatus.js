@@ -61,8 +61,8 @@ export const usePriorityStatus = ({ priority, grouping, hostId, onUpdate }) => {
           })
         }
       } catch (error) {
-        console.error('Ошибка получения комментария:', error)
-        message.error('Не удалось загрузить существующий комментарий')
+        // console.error('Ошибка получения комментария:', error)
+        // message.error('Не удалось загрузить существующий комментарий')
         updateState({ existingComment: {}, comment: '' })
       }
     }
