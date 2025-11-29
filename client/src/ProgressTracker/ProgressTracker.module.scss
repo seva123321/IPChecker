@@ -1,0 +1,30 @@
+.progress-tracker {
+  .file-item {
+    width: 100%;
+  }
+
+  .file-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+
+  .file-name {
+    display: flex;
+    align-items: center;
+    font-weight: 500;
+  }
+
+  .file-progress {
+    margin-top: 8px;
+  }
+
+  .file-stats {
+    display: flex;
+    gap: 16px;
+    margin-top: 8px;
+    font-size: 12px;
+    color: #666;
+  }
+}
