@@ -17,7 +17,6 @@
 .list {
   display: flex;
   flex-direction: column;
-  padding-bottom: 20px;
   gap: 20px;
   max-width: 800px;
   margin: 0 auto;
@@ -27,7 +26,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  align-items: center;
+  align-items: baseline;
   justify-content: center;
   width: 100%;
 }
@@ -87,11 +86,21 @@
   display: flex;
   gap: 16px;
   justify-content: center;
-  margin-top: 12px;
+  align-items: baseline;
+  margin-bottom: 12px;
 }
 
-.searchAllButton,
 .clearAllButton {
+  padding: 4px 8px;
+  font-size: 15px;
+  font-weight: 500;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.searchAllButton {
   padding: 8px 16px;
   font-size: 15px;
   font-weight: 500;
@@ -112,6 +121,7 @@
     cursor: not-allowed;
   }
 }
+
 
 .clearAllButton {
   background-color: #dc3545;
@@ -147,4 +157,30 @@
 
 .whois__word {
   color: #0069d9;
+}
+
+.portInputsContainer{
+  display: flex;
+  width: 300px;
+  flex-direction: column;
+}
+
+.checkboxContainer {
+  display: flex;
+  gap: 16px; 
+  align-items: center;
+  margin: 4px auto;
+
+  .checkboxLabel {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    
+    cursor: pointer; 
+    
+    &:hover {
+      color: #0069d9; 
+    }
+  }
 }
