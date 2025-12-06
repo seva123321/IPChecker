@@ -5,7 +5,7 @@ import cn from './GroupList.module.scss'
 import { Button } from '../Button/Button'
 import { useState, useEffect } from 'react'
 
-export const GroupList = ({ data, service, currentEndpoint }) => {
+export const GroupList = ({ items, service, currentEndpoint }) => {
   // Используем состояние для хранения данных с пагинацией
   const [paginatedData, setPaginatedData] = useState([])
   const [loading, setLoading] = useState(false)
@@ -66,24 +66,24 @@ export const GroupList = ({ data, service, currentEndpoint }) => {
     }
   }
 
-  // Инициализация данных при изменении `data`
+  // Инициализация данных при изменении `item`
   useEffect(() => {
-    if (data?.items.length) {
+    if (items.length) {
       // Изначально загружаем только первую страницу данных
       setPaginatedData(
-        data.items.map((item) => ({
+        items.map((item) => ({
           ...item,
-          items: item.items.slice(0, 10), // Первые 10 элементов
+          items: item.items?.slice(0, 10), // Первые 10 элементов
           pagination: {
             ...item.pagination,
             currentPage: 1,
-            hasNext: item.pagination.totalItems > 10,
+            hasNext: item.pagination?.totalItems > 10,
             hasPrev: false,
           },
         }))
       )
     }
-  }, [data])
+  }, [items])
 
   // Обработчик кнопки "Еще 10"
   const handleLoadMore = (endpoint, param) => {
@@ -109,12 +109,14 @@ export const GroupList = ({ data, service, currentEndpoint }) => {
         <div key={index} className={cn.listGroup}>
           <div className={cn.groupHeaderWrapper}>
             <div className={cn.groupHeader}>
-              <span>{itemData.name}</span>&nbsp;
-              <span>
-                {itemData.name
-                  ? `(порт ${itemData.port})`
-                  : `${itemData.keyword}`}
-              </span>
+              {itemData.port ? (
+                <>
+                  <span>{itemData.name}</span>&nbsp;
+                  <span>{`(порт ${itemData.port})`}</span>
+                </>
+              ) : (
+                <span>{itemData.keyword}</span>
+              )}
             </div>
             <span>{`Всего: ${itemData.pagination.totalItems}`}</span>
           </div>
