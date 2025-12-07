@@ -9,20 +9,20 @@ const withInfiniteScroll = (WrappedComponent) => {
   }) => {
     const [isFetching, setIsFetching] = useState(false)
     const timeoutRef = useRef(null)
-    const scrollHandlerRef = useRef(null)
+    const isFetchingRef = useRef(false)
 
     // Мемоизированный обработчик скролла
-    scrollHandlerRef.current = useCallback(() => {
-      if (isLoading || isFetching || !hasMore) return
+    const handleScroll = useCallback(() => {
+      if (isLoading || isFetchingRef.current || !hasMore) return
 
       const scrollTop = window.pageYOffset || document.documentElement.scrollTop
       const windowHeight = window.innerHeight
       const documentHeight = document.documentElement.scrollHeight
 
-      // Проверяем, достигли ли мы 80% от всей высоты документа
-      const scrollThreshold = 0.8 * documentHeight
-
-      if (scrollTop + windowHeight >= scrollThreshold) {
+      // Проверяем, достигли ли мы конца страницы с небольшим отступом
+      const offset = 100
+      if (scrollTop + windowHeight >= documentHeight - offset) {
+        isFetchingRef.current = true
         setIsFetching(true)
 
         // Очищаем предыдущий таймаут
@@ -38,17 +38,14 @@ const withInfiniteScroll = (WrappedComponent) => {
             console.error('Error in infinite scroll:', error)
           } finally {
             setIsFetching(false)
+            isFetchingRef.current = false
           }
-        }, 100)
+        }, 300)
       }
-    }, [isLoading, isFetching, hasMore, loadMoreData])
+    }, [isLoading, hasMore, loadMoreData])
 
     useEffect(() => {
-      const handleScroll = () => {
-        scrollHandlerRef.current()
-      }
-
-      // Добавляем троттлинг для производительности
+      // Троттлинг для производительности
       let ticking = false
       const throttledScroll = () => {
         if (!ticking) {
@@ -73,16 +70,23 @@ const withInfiniteScroll = (WrappedComponent) => {
           clearTimeout(timeoutRef.current)
         }
       }
-    }, [])
+    }, [handleScroll])
 
     // Сбрасываем isFetching когда загрузка завершена
     useEffect(() => {
       if (!isLoading && isFetching) {
         setIsFetching(false)
+        isFetchingRef.current = false
       }
     }, [isLoading, isFetching])
 
-    return <WrappedComponent {...props} isLoading={isLoading || isFetching} />
+    return (
+      <WrappedComponent 
+        {...props} 
+        isLoading={isLoading || isFetching} 
+        hasMore={hasMore}
+      />
+    )
   }
 
   WithInfiniteScroll.displayName = `WithInfiniteScroll(${
@@ -93,60 +97,3 @@ const withInfiniteScroll = (WrappedComponent) => {
 }
 
 export default withInfiniteScroll
-
-// import React, { useState, useEffect } from 'react';
-
-// const withInfiniteScroll = (WrappedComponent) => {
-//   const WithInfiniteScroll = ({ loadMoreData, hasMore, ...props }) => {
-//     const [isFetching, setIsFetching] = useState(false);
-
-//     useEffect(() => {
-//       if (!hasMore || isFetching) return;
-
-//       const handleScroll = () => {
-//         const scrollTop =
-//           window.pageYOffset ||
-//           document.documentElement.scrollTop ||
-//           document.body.scrollTop;
-//         const windowHeight = window.innerHeight;
-//         const bodyHeight =
-//           document.documentElement.scrollHeight || document.body.scrollHeight;
-
-//         if (scrollTop + windowHeight >= 0.8 * bodyHeight && !isFetching) {
-//           setIsFetching(true);
-//         }
-//       };
-
-//       window.addEventListener('scroll', handleScroll);
-
-//       return () => {
-//         window.removeEventListener('scroll', handleScroll);
-//       };
-//     }, [isFetching, hasMore]);
-
-//     useEffect(() => {
-//       if (!isFetching) return;
-
-//       const fetchData = async () => {
-//         await loadMoreData();
-//         setIsFetching(false);
-//       };
-
-//       fetchData();
-//     }, [isFetching, loadMoreData]);
-
-//     return <WrappedComponent {...props} />;
-//   };
-
-//   WithInfiniteScroll.displayName = `WithInfiniteScroll(${getDisplayName(
-//     WrappedComponent
-//   )})`;
-
-//   function getDisplayName(WrappedComponent) {
-//     return WrappedComponent.displayName || WrappedComponent.name || 'Component';
-//   }
-
-//   return WithInfiniteScroll;
-// };
-
-// export default withInfiniteScroll;
