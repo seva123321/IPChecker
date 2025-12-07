@@ -97,7 +97,8 @@ export function PanelFilters({ onSearch, onGroup, service }) {
             Найти
           </Button>
           <Button
-            onClick={() => onGroup('ip/group')}
+            // onClick={() => onGroup('ip/group')}
+            onClick={() => onSearch('ip')}
             className={cn.groupButton}
           >
             Группировать

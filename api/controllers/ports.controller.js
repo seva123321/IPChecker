@@ -14,7 +14,7 @@ import {
   sequelize,
   Priority,
   PriorityComment,
-  Grouping
+  Grouping,
 } from "../models/index.js";
 
 // Вспомогательная функция для форматирования данных хоста (без WHOIS и комментариев)
@@ -39,19 +39,20 @@ const formatHostData = (host) => {
   }
 
   // Проверяем наличие WHOIS данных для поля has_whois
-  const hasWhois = host.Whois && Array.isArray(host.Whois) && host.Whois.length > 0;
+  const hasWhois =
+    host.Whois && Array.isArray(host.Whois) && host.Whois.length > 0;
 
   // Получаем информацию о приоритете и группировке (без комментариев)
   const priorityInfo = {
     priority: null,
-    grouping: null
+    grouping: null,
   };
 
   // Добавляем информацию о приоритете - гарантируем наличие name
   if (host.priority_id || host.Priority) {
     priorityInfo.priority = {
       id: host.priority_id,
-      name: host.Priority?.name || "Unknown" // Значение по умолчанию
+      name: host.Priority?.name || "Unknown", // Значение по умолчанию
     };
   }
 
@@ -59,7 +60,7 @@ const formatHostData = (host) => {
   if (host.grouping_id || host.Grouping) {
     priorityInfo.grouping = {
       id: host.grouping_id,
-      name: host.Grouping?.name || null
+      name: host.Grouping?.name || null,
     };
   }
 
@@ -86,11 +87,11 @@ const sortItemsByPriority = (items) => {
     // Сначала сортируем по приоритету (DESC)
     const priorityA = a.priority_info?.priority?.id || 0;
     const priorityB = b.priority_info?.priority?.id || 0;
-    
+
     if (priorityB !== priorityA) {
       return priorityB - priorityA;
     }
-    
+
     // Если приоритеты одинаковые, сортируем по дате обновления
     if (a.updated_at && b.updated_at) {
       return new Date(b.updated_at) - new Date(a.updated_at);
@@ -105,7 +106,13 @@ const sortItemsByPriority = (items) => {
  */
 export const getPortInfo = async (req, res) => {
   try {
-    const { port: portQuery, page = 1, limit = 10 } = req.query;
+    const {
+      port: portQuery,
+      page = 1,
+      limit = 10,
+      o: portOpened,
+      f: portFiltered,
+    } = req.query;
 
     // Проверка параметров пагинации
     const pageNum = Math.max(1, parseInt(page) || 1);
@@ -118,10 +125,10 @@ export const getPortInfo = async (req, res) => {
 
     // Обработка значений вида "21 (ftp)" - извлекаем число из скобок
     let processedQuery = portQuery.trim();
-    
+
     // Проверяем формат "число (название)"
     const portWithNameMatch = processedQuery.match(/^(\d+)\s*\((.*)\)$/);
-    
+
     if (portWithNameMatch) {
       // Если формат "21 (ftp)", используем только числовую часть
       processedQuery = portWithNameMatch[1];
@@ -171,22 +178,45 @@ export const getPortInfo = async (req, res) => {
       targetPortNumber = knownPort.port;
     }
 
-    // Сначала получаем все IP-адреса, которые имеют указанный порт
-    const hostsWithPort = await Port.findAll({
-      where: whereCondition,
+    // Определяем условие для типа порта на основе параметров
+    let portTypeCondition = {};
+    
+    // Конвертируем параметры в boolean
+    const isOpened = portOpened === 'true';
+    const isFiltered = portFiltered === 'true';
+    
+    if (isOpened && !isFiltered) {
+      portTypeCondition.type = 'open';
+    } else if (!isOpened && isFiltered) {
+      portTypeCondition.type = 'filtered';
+    } else if (isOpened && isFiltered) {
+      // Если оба параметра true, ищем оба типа
+      portTypeCondition.type = { [Op.in]: ['open', 'filtered'] };
+    }
+    // Если оба false или не указаны - ищем все типы
+
+    // Создаем условие для поиска портов
+    const portSearchCondition = {
+      ...whereCondition,
+      ...portTypeCondition
+    };
+
+    // Находим все порты, соответствующие условиям и получаем ИД хостов
+    const ports = await Port.findAll({
+      where: portSearchCondition,
       include: [
         {
           model: Host,
-          attributes: ["id", "ip", "reachable", "updated_at", "priority_id", "grouping_id"],
+          attributes: ["id"],
+          required: true,
         },
       ],
-      attributes: [], // Не выбираем поля Port, только связи
-      distinct: true,
-      raw: false,
+      attributes: ['id'],
+      raw: true,
     });
 
     // Получаем уникальные ID хостов
-    const hostIds = [...new Set(hostsWithPort.map((p) => p.Host.id))];
+    const hostIds = [...new Set(ports.map((p) => p['Host.id']))];
 
     if (hostIds.length === 0) {
       return res.status(404).json({
@@ -205,7 +235,10 @@ export const getPortInfo = async (req, res) => {
     // Получаем общее количество записей для пагинации
     const totalCount = hostIds.length;
 
-    // Теперь получаем полные данные для этих хостов (все порты, приоритеты, группировки)
+    // Получаем общее количество страниц
+    const totalPages = Math.ceil(totalCount / limitNum);
+
+    // Теперь получаем полные данные для этих хостов с пагинацией
     const hosts = await Host.findAll({
       include: [
         {
@@ -241,7 +274,6 @@ export const getPortInfo = async (req, res) => {
           ],
           required: false,
         },
-        // ИСКЛЮЧАЕМ PriorityComment
       ],
       where: {
         id: { [Op.in]: hostIds },
@@ -252,11 +284,24 @@ export const getPortInfo = async (req, res) => {
     });
 
     // Формируем результат в нужном формате
-    const items = hosts.map(formatHostData);
+    const formattedHosts = hosts.map(formatHostData);
 
-    const totalPages = Math.ceil(totalCount / limitNum);
+    // Фильтруем результаты: оставляем только те хосты, у которых есть указанный порт с нужным типом
+    const filteredItems = formattedHosts.filter(host => {
+      const hasPort = host.port_data.open.some(p => p.port === targetPortNumber) ||
+                      host.port_data.filtered.some(p => p.port === targetPortNumber);
+      
+      // Если указан тип порта, проверяем конкретный тип
+      if (isOpened && !isFiltered) {
+        return host.port_data.open.some(p => p.port === targetPortNumber);
+      } else if (!isOpened && isFiltered) {
+        return host.port_data.filtered.some(p => p.port === targetPortNumber);
+      }
+      
+      return hasPort;
+    });
 
-    if (!items.length) {
+    if (filteredItems.length === 0) {
       return res.status(404).json({
         message: "Нет данных соответствующих поиску",
         items: [],
@@ -275,13 +320,13 @@ export const getPortInfo = async (req, res) => {
     if (targetPortNumber) {
       const knownPort = await WellKnownPort.findOne({
         where: { port: targetPortNumber },
-        attributes: ["name"]
+        attributes: ["name"],
       });
       portName = knownPort?.name || null;
     }
 
     const response = {
-      items: items,
+      items: filteredItems,
       pagination: {
         currentPage: pageNum,
         totalPages: totalPages,
@@ -293,8 +338,8 @@ export const getPortInfo = async (req, res) => {
       field: "port",
       port_info: {
         port: targetPortNumber,
-        name: portName
-      }
+        name: portName,
+      },
     };
 
     return res.json(response);
@@ -308,10 +353,10 @@ export const getPortInfo = async (req, res) => {
 async function getUniquePortsAndHosts(portQuery) {
   // Обработка значений вида "21 (ftp)" - извлекаем число из скобок
   let processedQuery = portQuery.trim();
-  
+
   // Проверяем формат "число (название)"
   const portWithNameMatch = processedQuery.match(/^(\d+)\s*\((.*)\)$/);
-  
+
   if (portWithNameMatch) {
     // Если формат "21 (ftp)", используем только числовую часть
     processedQuery = portWithNameMatch[1];
@@ -363,7 +408,7 @@ async function getUniquePortsAndHosts(portQuery) {
     }
   );
 
-  const hostIds = hostIdsResult.map(row => row.id);
+  const hostIds = hostIdsResult.map((row) => row.id);
 
   // Получаем полные данные для хостов через Sequelize
   const hosts = await Host.findAll({
@@ -405,7 +450,10 @@ async function getUniquePortsAndHosts(portQuery) {
     where: {
       id: { [Op.in]: hostIds },
     },
-    order: [["priority_id", "DESC"], ["updated_at", "DESC"]],
+    order: [
+      ["priority_id", "DESC"],
+      ["updated_at", "DESC"],
+    ],
   });
 
   return { uniquePorts, hosts };
@@ -473,7 +521,10 @@ async function getAllUniquePortsAndHosts() {
         required: false,
       },
     ],
-    order: [["priority_id", "DESC"], ["updated_at", "DESC"]],
+    order: [
+      ["priority_id", "DESC"],
+      ["updated_at", "DESC"],
+    ],
   });
 
   return { uniquePorts, hosts };
@@ -507,23 +558,23 @@ export const groupPort = async (req, res) => {
     let hosts;
 
     // Проверяем, есть ли фильтр по порту
-    if (portQuery !== undefined && portQuery !== '') {
+    if (portQuery !== undefined && portQuery !== "") {
       // Обработка значений вида "21 (ftp)" - извлекаем число из скобок
       let processedQuery = portQuery.trim();
-      
+
       // Проверяем формат "число (название)"
       const portWithNameMatch = processedQuery.match(/^(\d+)\s*\((.*)\)$/);
-      
+
       if (portWithNameMatch) {
         // Если формат "21 (ftp)", используем только числовую часть
         processedQuery = portWithNameMatch[1];
       }
 
       const isNumeric = /^\d+$/.test(processedQuery);
-      
+
       if (!isNumeric) {
-        return res.status(400).json({ 
-          error: "Для группировки портов необходим числовой порт" 
+        return res.status(400).json({
+          error: "Для группировки портов необходим числовой порт",
         });
       }
 
@@ -548,7 +599,7 @@ export const groupPort = async (req, res) => {
 
     // Формируем карту отформатированных хостов для избежания дублирования
     const formattedHostsMap = new Map();
-    
+
     hosts.forEach((host) => {
       if (!formattedHostsMap.has(host.id)) {
         formattedHostsMap.set(host.id, formatHostData(host));
@@ -573,14 +624,14 @@ export const groupPort = async (req, res) => {
     // Группируем хосты по портам
     for (const host of hosts) {
       const formattedHost = formattedHostsMap.get(host.id);
-      
+
       if (formattedHost && host.Ports && Array.isArray(host.Ports)) {
         for (const port of host.Ports) {
           const portNumber = port.port;
           if (portGroups[portNumber]) {
             // Проверяем, что хост еще не добавлен в эту группу
             const hostExists = portGroups[portNumber].items.some(
-              item => item.id === formattedHost.id
+              (item) => item.id === formattedHost.id
             );
             if (!hostExists) {
               portGroups[portNumber].items.push(formattedHost);
@@ -591,7 +642,7 @@ export const groupPort = async (req, res) => {
     }
 
     // Сортируем хосты внутри каждой группы по приоритету
-    Object.values(portGroups).forEach(group => {
+    Object.values(portGroups).forEach((group) => {
       sortItemsByPriority(group.items);
     });
 
@@ -620,18 +671,16 @@ export const groupPort = async (req, res) => {
       .sort((a, b) => a.port - b.port);
 
     // Если был задан конкретный порт, отфильтровываем результаты
-    if (portQuery !== undefined && portQuery !== '') {
+    if (portQuery !== undefined && portQuery !== "") {
       let processedQuery = portQuery.trim();
       const portWithNameMatch = processedQuery.match(/^(\d+)\s*\((.*)\)$/);
       if (portWithNameMatch) {
         processedQuery = portWithNameMatch[1];
       }
-      
+
       const portNum = Number(processedQuery);
-      const filteredItems = items.filter(
-        (item) => item.port === portNum
-      );
-      
+      const filteredItems = items.filter((item) => item.port === portNum);
+
       if (filteredItems.length > 0) {
         items = filteredItems;
       } else {
@@ -680,9 +729,11 @@ export const groupPort = async (req, res) => {
     return res.status(500).json({ error: "Внутренняя ошибка сервера" });
   }
 };
+// // Рабочий код но долгий
+// /*********************************************** */
 
-/*********************************************** */
 // // controllers/ports.controller.js
+
 // import { Sequelize } from "sequelize";
 // const { Op } = Sequelize;
 // import {
@@ -694,10 +745,10 @@ export const groupPort = async (req, res) => {
 //   sequelize,
 //   Priority,
 //   PriorityComment,
-//   Grouping
+//   Grouping,
 // } from "../models/index.js";
 
-// // Вспомогательная функция для форматирования данных хоста
+// // Вспомогательная функция для форматирования данных хоста (без WHOIS и комментариев)
 // const formatHostData = (host) => {
 //   const openPorts = [];
 //   const filteredPorts = [];
@@ -718,58 +769,35 @@ export const groupPort = async (req, res) => {
 //     });
 //   }
 
-//   const whois = {};
-//   let hasWhois = false;
-  
-//   // Проверяем, что Whois существует и является массивом
-//   if (host.Whois && Array.isArray(host.Whois)) {
-//     host.Whois.forEach((w) => {
-//       if (w.WhoisKey && w.value !== null) {
-//         whois[w.WhoisKey.key_name] = w.value;
-//         hasWhois = true;
-//       }
-//     });
-//   }
+//   // Проверяем наличие WHOIS данных для поля has_whois
+//   const hasWhois =
+//     host.Whois && Array.isArray(host.Whois) && host.Whois.length > 0;
 
-//   if (!hasWhois) {
-//     whois.error = "Whois query failed";
-//   }
-
-//   // Получаем информацию о приоритете и группировке
+//   // Получаем информацию о приоритете и группировке (без комментариев)
 //   const priorityInfo = {
 //     priority: null,
-//     comment: null,
-//     grouping: null
+//     grouping: null,
 //   };
 
-//   // Добавляем информацию о приоритете
-//   if (host.priority_id) {
+//   // Добавляем информацию о приоритете - гарантируем наличие name
+//   if (host.priority_id || host.Priority) {
 //     priorityInfo.priority = {
 //       id: host.priority_id,
-//       name: host.Priority?.name || null
-//     };
-//   }
-
-//   // Добавляем информацию о комментарии к приоритету
-//   if (host.PriorityComment) {
-//     priorityInfo.comment = {
-//       text: host.PriorityComment.comment,
-//       createdAt: host.PriorityComment.created_at
+//       name: host.Priority?.name || "Unknown", // Значение по умолчанию
 //     };
 //   }
 
 //   // Добавляем информацию о группировке
-//   if (host.grouping_id) {
+//   if (host.grouping_id || host.Grouping) {
 //     priorityInfo.grouping = {
 //       id: host.grouping_id,
-//       name: host.Grouping?.name || null
+//       name: host.Grouping?.name || null,
 //     };
 //   }
 
 //   return {
 //     id: host.id,
 //     ip: host.ip,
-//     country: whois.Country || null,
 //     reachable: host.reachable,
 //     updated_at: host.updated_at
 //       ? host.updated_at.toISOString().replace("T", " ").substring(0, 19)
@@ -780,7 +808,7 @@ export const groupPort = async (req, res) => {
 //     },
 //     priority_info: priorityInfo,
 //     has_whois: hasWhois,
-//     whois: whois,
+//     // ИСКЛЮЧАЕМ whois данные и comment
 //   };
 // };
 
@@ -788,10 +816,14 @@ export const groupPort = async (req, res) => {
 // const sortItemsByPriority = (items) => {
 //   return items.sort((a, b) => {
 //     // Сначала сортируем по приоритету (DESC)
-//     if (a.priority_info?.priority?.id && b.priority_info?.priority?.id) {
-//       return b.priority_info.priority.id - a.priority_info.priority.id;
+//     const priorityA = a.priority_info?.priority?.id || 0;
+//     const priorityB = b.priority_info?.priority?.id || 0;
+
+//     if (priorityB !== priorityA) {
+//       return priorityB - priorityA;
 //     }
-//     // Если приоритеты не определены, сортируем по дате обновления
+
+//     // Если приоритеты одинаковые, сортируем по дате обновления
 //     if (a.updated_at && b.updated_at) {
 //       return new Date(b.updated_at) - new Date(a.updated_at);
 //     }
@@ -801,30 +833,46 @@ export const groupPort = async (req, res) => {
 
 // /**
 //  * Получение информации о конкретном порте с пагинацией
-//  * Поддерживает поиск по числовому значению порта или по имени сервиса
+//  * Поддерживает поиск по числовому значению порта, по имени сервиса или по значениям вида "21 (ftp)"
 //  */
 // export const getPortInfo = async (req, res) => {
 //   try {
-//     const { port: portQuery, page = 1, limit = 10 } = req.query;
+//     const {
+//       port: portQuery,
+//       page = 1,
+//       limit = 10,
+//       o: portOpened,
+//       f: portFiltered,
+//     } = req.query;
 
+  
 //     // Проверка параметров пагинации
 //     const pageNum = Math.max(1, parseInt(page) || 1);
-//     const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10)); // Ограничение на 100 элементов
+//     const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
 //     const offset = (pageNum - 1) * limitNum;
 
-//     const [portNumber, portNameWithWrapper] = portQuery.split(" ");
-
-//     // console.log("portNumber  > ", portNumber);
 //     if (portQuery === undefined) {
 //       return res.status(400).json({ error: "Параметр 'port' обязателен" });
 //     }
 
+//     // Обработка значений вида "21 (ftp)" - извлекаем число из скобок
+//     let processedQuery = portQuery.trim();
+
+//     // Проверяем формат "число (название)"
+//     const portWithNameMatch = processedQuery.match(/^(\d+)\s*\((.*)\)$/);
+
+//     if (portWithNameMatch) {
+//       // Если формат "21 (ftp)", используем только числовую часть
+//       processedQuery = portWithNameMatch[1];
+//     }
+
 //     // Определяем, передано число или строка
-//     const isNumeric = /^\d+$/.test(portNumber ?? portQuery);
+//     const isNumeric = /^\d+$/.test(processedQuery);
 //     let whereCondition;
+//     let targetPortNumber = null;
 
 //     if (isNumeric) {
-//       const portNum = Number(portNumber ?? portQuery);
+//       const portNum = Number(processedQuery);
 //       if (portNum < 1 || portNum > 65535) {
 //         return res
 //           .status(400)
@@ -832,11 +880,12 @@ export const groupPort = async (req, res) => {
 //       }
 //       // Поиск по числовому значению порта
 //       whereCondition = { port: portNum };
+//       targetPortNumber = portNum;
 //     } else {
-//       // Поиск по имени сервиса (например, 'https')
+//       // Поиск по имени сервиса (например, 'https', 'ftp')
 //       const knownPort = await WellKnownPort.findOne({
 //         where: {
-//           name: { [Op.iLike]: portQuery },
+//           name: { [Op.iLike]: processedQuery },
 //         },
 //       });
 
@@ -844,6 +893,13 @@ export const groupPort = async (req, res) => {
 //         return res.status(404).json({
 //           message: "Нет данных соответствующих поиску",
 //           items: [],
+//           pagination: {
+//             currentPage: pageNum,
+//             totalPages: 0,
+//             totalItems: 0,
+//             hasNext: false,
+//             hasPrev: false,
+//           },
 //         });
 //       }
 
@@ -851,6 +907,7 @@ export const groupPort = async (req, res) => {
 //       whereCondition = {
 //         port: knownPort.port,
 //       };
+//       targetPortNumber = knownPort.port;
 //     }
 
 //     // Сначала получаем все IP-адреса, которые имеют указанный порт
@@ -859,35 +916,56 @@ export const groupPort = async (req, res) => {
 //       include: [
 //         {
 //           model: Host,
-//           attributes: ["ip", "reachable", "updated_at"],
-//         },
-//         // Включаем WellKnownPort, чтобы получить имя сервиса
-//         {
-//           model: WellKnownPort,
-//           attributes: ["name"],
-//           required: false, // Не обязательно, чтобы не исключать порты без имени
+//           attributes: [
+//             "id",
+//             "ip",
+//             "reachable",
+//             "updated_at",
+//             "priority_id",
+//             "grouping_id",
+//           ],
 //         },
 //       ],
 //       attributes: [], // Не выбираем поля Port, только связи
-//       distinct: true, // Убираем дубликаты
+//       distinct: true,
 //       raw: false,
 //     });
 
-//     // Получаем уникальные IP-адреса
-//     const ipAddresses = hostsWithPort.map((p) => p.Host.ip);
+//     let whereClause = {};
+    
+//     if (portFiltered && portOpened) {
+//       whereClause[Op.or] = [{ type: 'filtered' }, { type: 'open' }];
+//     } else if (portFiltered) {
+//       whereClause.type = 'filtered';
+//     } else if (portOpened) {
+//       whereClause.type = 'open';
+//     }
+//     console.log('portOpened', portOpened)
+//     console.log('portFiltered', portFiltered)
+//     console.log(whereClause)
 
-//     if (ipAddresses.length === 0) {
+//     // Получаем уникальные ID хостов
+//     const hostIds = [...new Set(hostsWithPort.map((p) => p.Host.id))];
+
+//     if (hostIds.length === 0) {
 //       return res.status(404).json({
 //         message: "Нет данных соответствующих поиску",
 //         items: [],
+//         pagination: {
+//           currentPage: pageNum,
+//           totalPages: 0,
+//           totalItems: 0,
+//           hasNext: false,
+//           hasPrev: false,
+//         },
 //       });
 //     }
 
 //     // Получаем общее количество записей для пагинации
-//     const totalCount = ipAddresses.length;
+//     const totalCount = hostIds.length;
 
-//     // Теперь получаем все порты для этих IP-адресов (все данные по IP)
-//     const allPortsForHosts = await Host.findAll({
+//     // Теперь получаем полные данные для этих хостов (все порты, приоритеты, группировки)
+//     const hosts = await Host.findAll({
 //       include: [
 //         {
 //           model: Port,
@@ -896,8 +974,20 @@ export const groupPort = async (req, res) => {
 //             {
 //               model: WellKnownPort,
 //               attributes: ["name"],
+//               required: false,
 //             },
 //           ],
+//           where: whereClause,
+//         },
+//         {
+//           model: Priority,
+//           attributes: ["id", "name"],
+//           required: false,
+//         },
+//         {
+//           model: Grouping,
+//           attributes: ["id", "name"],
+//           required: false,
 //         },
 //         {
 //           model: Whois,
@@ -906,42 +996,24 @@ export const groupPort = async (req, res) => {
 //             {
 //               model: WhoisKey,
 //               attributes: ["key_name"],
+//               required: false,
 //             },
 //           ],
-//         },
-//         // Включаем приоритеты
-//         {
-//           model: Priority,
-//           attributes: ["id", "name"],
 //           required: false,
 //         },
-//         // Включаем комментарии к приоритетам
-//         {
-//           model: PriorityComment,
-//           attributes: ["comment", "created_at"],
-//           include: [{
-//             model: Priority,
-//             attributes: ["name"]
-//           }],
-//           required: false
-//         },
-//         // Включаем группировки
-//         {
-//           model: Grouping,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
+//         // ИСКЛЮЧАЕМ PriorityComment
 //       ],
 //       where: {
-//         ip: { [Op.in]: ipAddresses },
+//         id: { [Op.in]: hostIds },
 //       },
 //       order: [["priority_id", "DESC"]],
 //       limit: limitNum,
 //       offset: offset,
 //     });
+    
 
 //     // Формируем результат в нужном формате
-//     const items = allPortsForHosts.map(formatHostData);
+//     const items = hosts.map(formatHostData);
 
 //     const totalPages = Math.ceil(totalCount / limitNum);
 
@@ -959,6 +1031,16 @@ export const groupPort = async (req, res) => {
 //       });
 //     }
 
+//     // Получаем имя порта для ответа
+//     let portName = null;
+//     if (targetPortNumber) {
+//       const knownPort = await WellKnownPort.findOne({
+//         where: { port: targetPortNumber },
+//         attributes: ["name"],
+//       });
+//       portName = knownPort?.name || null;
+//     }
+
 //     const response = {
 //       items: items,
 //       pagination: {
@@ -970,30 +1052,40 @@ export const groupPort = async (req, res) => {
 //       },
 //       type: "search",
 //       field: "port",
+//       port_info: {
+//         port: targetPortNumber,
+//         name: portName,
+//       },
 //     };
 
 //     return res.json(response);
 //   } catch (error) {
 //     console.error("Ошибка в getPortInfo:", error);
-//     return res
-//       .status(500)
-//       .json({ error: "Нет результатов удовлетворяющих поиску" });
+//     return res.status(500).json({ error: "Внутренняя ошибка сервера" });
 //   }
 // };
 
-// // Вспомогательная функция для получения уникальных портов и хостов
-// async function getUniquePortsAndHosts(
-//   portQuery,
-//   isNumeric,
-//   whereCondition,
-//   req,
-//   res
-// ) {
-//   let uniquePorts;
-//   let hosts;
+// // Вспомогательная функция для получения уникальных портов и хостов для конкретного порта
+// async function getUniquePortsAndHosts(portQuery) {
+//   // Обработка значений вида "21 (ftp)" - извлекаем число из скобок
+//   let processedQuery = portQuery.trim();
 
-//   // Используем raw SQL для избежания неоднозначности
-//   // Сначала получаем уникальные порты с подсчетом хостов и именем порта
+//   // Проверяем формат "число (название)"
+//   const portWithNameMatch = processedQuery.match(/^(\d+)\s*\((.*)\)$/);
+
+//   if (portWithNameMatch) {
+//     // Если формат "21 (ftp)", используем только числовую часть
+//     processedQuery = portWithNameMatch[1];
+//   }
+
+//   const isNumeric = /^\d+$/.test(processedQuery);
+//   const portNumber = isNumeric ? Number(processedQuery) : null;
+
+//   if (!isNumeric) {
+//     throw new Error("Для группировки портов необходим числовой порт");
+//   }
+
+//   // Используем raw SQL для получения уникальных портов с подсчетом хостов
 //   const rawUniquePortsResult = await sequelize.query(
 //     `
 //     SELECT DISTINCT p."port", COUNT(DISTINCT h."id") as "count", w."name" as "port_name"
@@ -1005,61 +1097,85 @@ export const groupPort = async (req, res) => {
 //     ORDER BY p."port" ASC
 //   `,
 //     {
-//       replacements: { port: isNumeric ? Number(portQuery) : null },
+//       replacements: { port: portNumber },
 //       type: sequelize.QueryTypes.SELECT,
 //     }
 //   );
 
-//   // Для числового порта используем результат первого запроса
-//   uniquePorts = rawUniquePortsResult.map((row) => ({
+//   const uniquePorts = rawUniquePortsResult.map((row) => ({
 //     dataValues: {
 //       port: row.port,
 //       count: row.count,
-//       "WellKnownPort.name": row.port_name, // Используем имя порта из запроса
+//       "WellKnownPort.name": row.port_name,
 //     },
 //   }));
 
-//   // Теперь получаем хосты с портами для конкретного порта
-//   // Используем raw SQL для точного контроля
-//   const rawHostsResult = await sequelize.query(
+//   // Получаем ID хостов с указанным портом
+//   const hostIdsResult = await sequelize.query(
 //     `
-//     SELECT h."id", h."ip", h."reachable", h."updated_at",
-//            p."port", p."type",
-//            w."name" as "WellKnownPort.name"
+//     SELECT DISTINCT h."id"
 //     FROM "hosts" AS h
 //     INNER JOIN "ports" AS p ON h."id" = p."host_id"
-//     LEFT JOIN "well_known_ports" AS w ON p."port" = w."port"
 //     WHERE p."port" = :port
-//     ORDER BY h."updated_at" DESC
 //   `,
 //     {
-//       replacements: { port: Number(portQuery) },
+//       replacements: { port: portNumber },
 //       type: sequelize.QueryTypes.SELECT,
 //     }
 //   );
 
-//   // Преобразуем результат в структуру, аналогичную той, что ожидается
-//   hosts = rawHostsResult.map((row) => ({
-//     id: row.id,
-//     ip: row.ip,
-//     reachable: row.reachable,
-//     updated_at: row.updated_at,
-//     Ports: [
+//   const hostIds = hostIdsResult.map((row) => row.id);
+
+//   // Получаем полные данные для хостов через Sequelize
+//   const hosts = await Host.findAll({
+//     include: [
 //       {
-//         port: row.port,
-//         type: row.type,
-//         WellKnownPort: row["WellKnownPort.name"]
-//           ? { name: row["WellKnownPort.name"] }
-//           : null,
+//         model: Port,
+//         attributes: ["port", "type"],
+//         include: [
+//           {
+//             model: WellKnownPort,
+//             attributes: ["name"],
+//             required: false,
+//           },
+//         ],
+//       },
+//       {
+//         model: Priority,
+//         attributes: ["id", "name"],
+//         required: false,
+//       },
+//       {
+//         model: Grouping,
+//         attributes: ["id", "name"],
+//         required: false,
+//       },
+//       {
+//         model: Whois,
+//         attributes: ["value"],
+//         include: [
+//           {
+//             model: WhoisKey,
+//             attributes: ["key_name"],
+//             required: false,
+//           },
+//         ],
+//         required: false,
 //       },
 //     ],
-//     Whois: [], // Инициализируем пустым массивом
-//   }));
+//     where: {
+//       id: { [Op.in]: hostIds },
+//     },
+//     order: [
+//       ["priority_id", "DESC"],
+//       ["updated_at", "DESC"],
+//     ],
+//   });
 
 //   return { uniquePorts, hosts };
 // }
 
-// // Вспомогательная функция для получения уникальных портов и хостов без фильтрации по порту
+// // Вспомогательная функция для получения всех уникальных портов и хостов
 // async function getAllUniquePortsAndHosts() {
 //   // Используем raw SQL для получения уникальных портов
 //   const rawUniquePortsResult = await sequelize.query(
@@ -1080,43 +1196,52 @@ export const groupPort = async (req, res) => {
 //     dataValues: {
 //       port: row.port,
 //       count: row.count,
-//       "WellKnownPort.name": row.port_name, // Используем имя порта из запроса
+//       "WellKnownPort.name": row.port_name,
 //     },
 //   }));
 
-//   // Получаем хосты с портами и именами сервисов
-//   const rawHostsResult = await sequelize.query(
-//     `
-//     SELECT h."id", h."ip", h."reachable", h."updated_at",
-//            p."port", p."type",
-//            w."name" as "WellKnownPort.name"
-//     FROM "hosts" AS h
-//     INNER JOIN "ports" AS p ON h."id" = p."host_id"
-//     LEFT JOIN "well_known_ports" AS w ON p."port" = w."port"
-//     ORDER BY h."updated_at" DESC
-//   `,
-//     {
-//       type: sequelize.QueryTypes.SELECT,
-//     }
-//   );
-
-//   // Преобразуем результат в структуру, аналогичную той, что ожидается
-//   const hosts = rawHostsResult.map((row) => ({
-//     id: row.id,
-//     ip: row.ip,
-//     reachable: row.reachable,
-//     updated_at: row.updated_at,
-//     Ports: [
+//   // Получаем все хосты с полными данными через Sequelize
+//   const hosts = await Host.findAll({
+//     include: [
 //       {
-//         port: row.port,
-//         type: row.type,
-//         WellKnownPort: row["WellKnownPort.name"]
-//           ? { name: row["WellKnownPort.name"] }
-//           : null,
+//         model: Port,
+//         attributes: ["port", "type"],
+//         include: [
+//           {
+//             model: WellKnownPort,
+//             attributes: ["name"],
+//             required: false,
+//           },
+//         ],
+//       },
+//       {
+//         model: Priority,
+//         attributes: ["id", "name"],
+//         required: false,
+//       },
+//       {
+//         model: Grouping,
+//         attributes: ["id", "name"],
+//         required: false,
+//       },
+//       {
+//         model: Whois,
+//         attributes: ["value"],
+//         include: [
+//           {
+//             model: WhoisKey,
+//             attributes: ["key_name"],
+//             required: false,
+//           },
+//         ],
+//         required: false,
 //       },
 //     ],
-//     Whois: [], // Инициализируем пустым массивом
-//   }));
+//     order: [
+//       ["priority_id", "DESC"],
+//       ["updated_at", "DESC"],
+//     ],
+//   });
 
 //   return { uniquePorts, hosts };
 // }
@@ -1141,42 +1266,42 @@ export const groupPort = async (req, res) => {
 // export const groupPort = async (req, res) => {
 //   try {
 //     // Get pagination parameters from request query
-//     const { page = 1, limit = 3, port: portQuery } = req.query;
+//     const { page = 1, limit = 10, port: portQuery } = req.query;
 //     const pageNum = Math.max(1, parseInt(page, 10));
-//     const pageSize = Math.min(100, Math.max(1, parseInt(limit, 10))); // Ограничение на 100 элементов
+//     const pageSize = Math.min(100, Math.max(1, parseInt(limit, 10)));
 
 //     let uniquePorts;
 //     let hosts;
 
 //     // Проверяем, есть ли фильтр по порту
-//     if (portQuery !== undefined) {
-//       // Если указан конкретный порт, фильтруем данные
-//       const isNumeric = /^\d+$/.test(portQuery);
-//       let whereCondition;
+//     if (portQuery !== undefined && portQuery !== "") {
+//       // Обработка значений вида "21 (ftp)" - извлекаем число из скобок
+//       let processedQuery = portQuery.trim();
 
-//       if (isNumeric) {
-//         const portNum = Number(portQuery);
-//         if (portNum < 1 || portNum > 65535) {
-//           return res
-//             .status(400)
-//             .json({ error: "Порт должен быть числом от 1 до 65535" });
-//         }
-//         whereCondition = { port: portNum };
-//       } else {
-//         // Поиск по имени сервиса (например, 'https')
-//         whereCondition = {
-//           "$WellKnownPort.name$": { [Sequelize.Op.iLike]: `%${portQuery}%` },
-//         };
+//       // Проверяем формат "число (название)"
+//       const portWithNameMatch = processedQuery.match(/^(\d+)\s*\((.*)\)$/);
+
+//       if (portWithNameMatch) {
+//         // Если формат "21 (ftp)", используем только числовую часть
+//         processedQuery = portWithNameMatch[1];
 //       }
 
-//       // Получаем уникальные порты и хосты для конкретного порта
-//       const result = await getUniquePortsAndHosts(
-//         portQuery,
-//         isNumeric,
-//         whereCondition,
-//         req,
-//         res
-//       );
+//       const isNumeric = /^\d+$/.test(processedQuery);
+
+//       if (!isNumeric) {
+//         return res.status(400).json({
+//           error: "Для группировки портов необходим числовой порт",
+//         });
+//       }
+
+//       const portNum = Number(processedQuery);
+//       if (portNum < 1 || portNum > 65535) {
+//         return res
+//           .status(400)
+//           .json({ error: "Порт должен быть числом от 1 до 65535" });
+//       }
+
+//       const result = await getUniquePortsAndHosts(processedQuery);
 //       uniquePorts = result.uniquePorts;
 //       hosts = result.hosts;
 //     } else {
@@ -1188,62 +1313,58 @@ export const groupPort = async (req, res) => {
 
 //     const totalCount = uniquePorts.length;
 
-//     // Формируем карту хостов для быстрого доступа
-//     const hostMap = {};
+//     // Формируем карту отформатированных хостов для избежания дублирования
+//     const formattedHostsMap = new Map();
+
 //     hosts.forEach((host) => {
-//       // Инициализируем пустые массивы для Ports и Whois если они отсутствуют
-//       if (!host.Ports) host.Ports = [];
-//       if (!host.Whois) host.Whois = [];
-      
-//       // Создаем объект хоста в формате, как в formatHostData
-//       if (!hostMap[host.ip]) {
-//         hostMap[host.ip] = formatHostData(host); // Форматируем данные хоста
+//       if (!formattedHostsMap.has(host.id)) {
+//         formattedHostsMap.set(host.id, formatHostData(host));
 //       }
 //     });
 
-//     // Группируем хосты по портам и добавляем имена портов
+//     // Группируем хосты по портам
 //     const portGroups = {};
 
 //     for (const portRecord of uniquePorts) {
 //       const portNumber = portRecord.dataValues.port;
 //       const portCount = portRecord.dataValues.count;
 
-//       // Инициализируем группу для порта с полем name из WellKnownPort
 //       portGroups[portNumber] = {
 //         port: parseInt(portNumber),
 //         count: portCount,
+//         name: portRecord.dataValues["WellKnownPort.name"] || null,
 //         items: [],
 //       };
-
-//       // Теперь используем имя порта, которое мы получили из БД
-//       portGroups[portNumber].name =
-//         portRecord.dataValues["WellKnownPort.name"] || null;
 //     }
 
-//     // Теперь проходим по всем хостам и группируем их по портам
-//     // Используем данные из hosts, которые уже содержат всю информацию
+//     // Группируем хосты по портам
 //     for (const host of hosts) {
-//       // Проверяем, что host.Ports существует и является массивом
-//       if (host.Ports && Array.isArray(host.Ports)) {
-//         const formattedHostData = formatHostData(host);
+//       const formattedHost = formattedHostsMap.get(host.id);
+
+//       if (formattedHost && host.Ports && Array.isArray(host.Ports)) {
 //         for (const port of host.Ports) {
 //           const portNumber = port.port;
 //           if (portGroups[portNumber]) {
-//             // Добавляем хост в группу по номеру порта
-//             portGroups[portNumber].items.push(formattedHostData);
+//             // Проверяем, что хост еще не добавлен в эту группу
+//             const hostExists = portGroups[portNumber].items.some(
+//               (item) => item.id === formattedHost.id
+//             );
+//             if (!hostExists) {
+//               portGroups[portNumber].items.push(formattedHost);
+//             }
 //           }
 //         }
 //       }
 //     }
 
 //     // Сортируем хосты внутри каждой группы по приоритету
-//     Object.values(portGroups).forEach(group => {
+//     Object.values(portGroups).forEach((group) => {
 //       sortItemsByPriority(group.items);
 //     });
 
 //     // Преобразуем в нужный формат и сортируем по возрастанию портов
 //     let items = Object.values(portGroups)
-//       .filter((group) => group.items.length > 0) // Убираем пустые группы
+//       .filter((group) => group.items.length > 0)
 //       .map((group) => {
 //         const totalItemsInGroup = group.items.length;
 //         const totalPagesInGroup = Math.ceil(totalItemsInGroup / pageSize);
@@ -1266,16 +1387,19 @@ export const groupPort = async (req, res) => {
 //       .sort((a, b) => a.port - b.port);
 
 //     // Если был задан конкретный порт, отфильтровываем результаты
-//     if (portQuery !== undefined) {
-//       // Фильтруем по указанному порту
-//       const filteredItems = items.filter(
-//         (item) => item.port === parseInt(portQuery)
-//       );
-//       // Для одного порта, если он есть, то возвращаем его
+//     if (portQuery !== undefined && portQuery !== "") {
+//       let processedQuery = portQuery.trim();
+//       const portWithNameMatch = processedQuery.match(/^(\d+)\s*\((.*)\)$/);
+//       if (portWithNameMatch) {
+//         processedQuery = portWithNameMatch[1];
+//       }
+
+//       const portNum = Number(processedQuery);
+//       const filteredItems = items.filter((item) => item.port === portNum);
+
 //       if (filteredItems.length > 0) {
 //         items = filteredItems;
 //       } else {
-//         // Если ничего не найдено для этого порта
 //         return res.status(404).json({
 //           message: "Нет данных соответствующих поиску",
 //           items: [],
@@ -1294,7 +1418,7 @@ export const groupPort = async (req, res) => {
 
 //     if (!items.length) {
 //       return res.status(404).json({
-//         message: "Нет данных соответствующих поиску",
+//         message: "Нет данных",
 //         items: [],
 //         pagination: {
 //           currentPage: pageNum,
