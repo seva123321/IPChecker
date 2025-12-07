@@ -20,6 +20,8 @@
   max-width: 800px;
   margin: 0 auto;
 }
+
+
 .searchGroup {
   display: flex;
   align-items: center;
@@ -32,6 +34,9 @@
   border: 1px solid #d9d9d9;
   border-radius: 6px;
 
+  &__range {
+    justify-content: center;
+  }
   & > .highlightedField {
     border-color: #1890ff;
     box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
@@ -75,6 +80,7 @@
     cursor: not-allowed;
   }
 }
+
 .groupButton {
   background-color: #28a745;
   color: white;
@@ -164,4 +170,7 @@
 
 .fieldLabel {
   margin-right: 8px;
+}
+.radioGroup {
+  color: #218838;
 }
