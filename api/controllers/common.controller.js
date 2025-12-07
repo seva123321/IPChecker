@@ -4,6 +4,7 @@ import {
   sequelize,
   Priority,
   Grouping,
+  Country,
 } from "../models/index.js";
 
 export const definingTableType = (req, res) => {
@@ -27,6 +28,9 @@ export const definingTableType = (req, res) => {
       break;
     case "keywords":
       getKeywordsTable(req, res);
+      break;
+    case "country":
+      getCountryTable(req, res);
       break;
     default:
       break;
@@ -125,6 +129,46 @@ export const getGroupTable = async (req, res) => {
       .json({ error: "Нет результатов удовлетворяющих поиску" });
   }
 };
+
+export const getCountryTable = async (req, res) => {
+  try {
+    // Вариант 1: Использовать простой findAll, так как в таблице уже уникальные названия стран
+    const countries = await Country.findAll({
+      attributes: ["id", "name"],
+      order: [["name", "ASC"]],
+      raw: true,
+    });
+
+    // Вариант 2: Если нужен DISTINCT, использовать raw query
+    // const [countries] = await sequelize.query(
+    //   `SELECT DISTINCT id, name FROM countries ORDER BY name ASC`,
+    //   {
+    //     type: sequelize.QueryTypes.SELECT,
+    //     raw: true,
+    //   }
+    // );
+
+    if (!countries || countries.length === 0) {
+      return res.status(404).json({
+        error: "Нет результатов удовлетворяющих поиску",
+        data: []
+      });
+    }
+
+    const data = countries.map((item) => ({
+      id: item.id,
+      name: item.name,
+    }));
+
+    return res.json({ data });
+  } catch (error) {
+    console.error("Ошибка в getCountryTable:", error);
+    return res
+      .status(500)
+      .json({ error: "Нет результатов удовлетворяющих поиску" });
+  }
+};
+
 
 export const getKeywordsTable = async (req, res) => {
   try {
