@@ -1,11 +1,15 @@
-// с корректной кодировкой ru
 import { useState, useRef, useCallback } from 'react'
-import { Tabs, message, Modal, FloatButton } from 'antd'
-import { MinusOutlined, ArrowsAltOutlined } from '@ant-design/icons'
+import { Tabs, message, Modal } from 'antd'
 import cn from './PanelUpload.module.scss'
 import { UploadArea } from './UploadArea'
 import { ExportButton } from '../ExportButton/ExportButton'
 import { ProgressTracker } from '../ProgressTracker/ProgressTracker'
+import {
+  decodeFileName,
+  encodeFileName,
+  generateClientId,
+} from '../utils/function'
+import { JSONUploadProgress } from '../JSONUploadProgress'
 
 export function PanelUpload({ service }) {
   const [activeTab, setActiveTab] = useState('ip')
@@ -23,50 +27,7 @@ export function PanelUpload({ service }) {
     }
   }
 
-  const generateClientId = useCallback(() => {
-    return `client_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-  }, [])
-
-  // Функция для кодирования имени файла с сохранением кириллицы
-  const encodeFileName = (fileName) => {
-    // Сохраняем расширение файла
-    const extension = fileName.split('.').pop()
-    const nameWithoutExtension = fileName.substring(
-      0,
-      fileName.lastIndexOf('.')
-    )
-
-    // Кодируем имя файла для передачи, сохраняя кириллицу
-    const encodedName = encodeURIComponent(nameWithoutExtension)
-
-    // Возвращаем имя с оригинальным расширением
-    return `${encodedName}.${extension}`
-  }
-
-  // Функция для декодирования имени файла
-  const decodeFileName = (fileName) => {
-    try {
-      // Разделяем имя и расширение
-      const extension = fileName.split('.').pop()
-      const encodedName = fileName.substring(0, fileName.lastIndexOf('.'))
-
-      // Декодируем имя файла
-      const decodedName = decodeURIComponent(encodedName)
-
-      return `${decodedName}.${extension}`
-    } catch (error) {
-      console.warn('Ошибка декодирования имени файла:', error)
-      return fileName // Возвращаем оригинальное имя в случае ошибки
-    }
-  }
-
   const handleUpload = async (files) => {
-    if (files.length === 0) {
-      message.warning('Выберите файлы для загрузки')
-      return
-    }
-
-    // Сбрасываем состояние минимизации при новой загрузке
     setIsProgressMinimized(false)
 
     const newClientId = generateClientId()
@@ -74,14 +35,13 @@ export function PanelUpload({ service }) {
     progressTrackerKeyRef.current += 1
     setProgressVisible(true)
 
-    // Даем время для подключения SSE
+    // Время для подключения SSE
     await new Promise((resolve) => setTimeout(resolve, 500))
 
     const formData = new FormData()
 
     // Добавляем файлы с закодированными именами
     files.forEach((file) => {
-      // Создаем новый File объект с закодированным именем
       const encodedFileName = encodeFileName(file.name)
       const encodedFile = new File([file], encodedFileName, {
         type: file.type,
@@ -105,10 +65,7 @@ export function PanelUpload({ service }) {
         },
       })
 
-      message.success(
-        `Файлы успешно отправлены (${activeTab === 'ip' ? 'IP-адреса' : 'JSON-данные'})`
-      )
-
+      message.success('Файлы успешно отправлены')
       setFileList([])
     } catch (err) {
       console.error('Ошибка загрузки:', err)
@@ -123,21 +80,14 @@ export function PanelUpload({ service }) {
   const handleProgressComplete = (processedFiles) => {
     console.log('Обработка завершена:', processedFiles)
 
-    // Декодируем имена файлов для отображения
-    const decodedFiles = processedFiles.map((file) => ({
-      ...file,
-      fileName: decodeFileName(file.fileName),
-    }))
-
-    console.log('Обработанные файлы (с декодированными именами):', decodedFiles)
     message.success('Обработка всех файлов завершена!')
 
     // Автоматически закрываем через 5 секунд
-    setTimeout(() => {
-      setProgressVisible(false)
-      setCurrentClientId(null)
-      setIsProgressMinimized(false)
-    }, 5000)
+    // setTimeout(() => {
+    //   setProgressVisible(false)
+    //   setCurrentClientId(null)
+    //   setIsProgressMinimized(false)
+    // }, 5000)
   }
 
   const handleModalClose = () => {
@@ -150,7 +100,7 @@ export function PanelUpload({ service }) {
     setIsProgressMinimized(!isProgressMinimized)
   }
 
-  const getUploadText = () => {
+  const getUploadText = useCallback(() => {
     switch (activeTab) {
       case 'ip':
         return 'Нажмите или перетащите файл с IP-адресами (.txt) в эту область'
@@ -159,9 +109,9 @@ export function PanelUpload({ service }) {
       default:
         return 'Нажмите или перетащите файл в эту область'
     }
-  }
+  }, [activeTab])
 
-  const getUploadHint = () => {
+  const getUploadHint = useCallback(() => {
     switch (activeTab) {
       case 'ip':
         return 'Поддерживаются только файлы с расширением .txt'
@@ -170,7 +120,7 @@ export function PanelUpload({ service }) {
       default:
         return 'Поддерживаются файлы с определенными расширениями'
     }
-  }
+  }, [activeTab])
 
   return (
     <div className={cn['panel-upload']}>
@@ -210,11 +160,15 @@ export function PanelUpload({ service }) {
 
       {/* Модальное окно с прогрессом */}
       <Modal
-        title={isProgressMinimized ? null : 'Обработка файлов'}
+        title={
+          isProgressMinimized
+            ? null
+            : `${activeTab === 'json' ? 'Импорт JSON файлов' : 'Обработка IP файлов'}`
+        }
         open={progressVisible && !isProgressMinimized}
         onCancel={handleModalClose}
         footer={null}
-        width={600}
+        width={activeTab === 'json' ? 800 : 600}
         maskClosable={false}
         destroyOnClose={true}
         style={{
@@ -223,13 +177,26 @@ export function PanelUpload({ service }) {
         }}
       >
         {currentClientId && (
-          <ProgressTracker
-            key={progressTrackerKeyRef.current}
-            clientId={currentClientId}
-            onComplete={handleProgressComplete}
-            onToggleMinimize={toggleProgressMinimize}
-            decodeFileName={decodeFileName}
-          />
+          <>
+            {activeTab === 'json' ? (
+              <JSONUploadProgress
+                key={`json-${progressTrackerKeyRef.current}`}
+                clientId={currentClientId}
+                onComplete={handleProgressComplete}
+                onToggleMinimize={toggleProgressMinimize}
+                decodeFileName={decodeFileName}
+                showExportButtons={false}
+              />
+            ) : (
+              <ProgressTracker
+                key={`ip-${progressTrackerKeyRef.current}`}
+                clientId={currentClientId}
+                onComplete={handleProgressComplete}
+                onToggleMinimize={toggleProgressMinimize}
+                decodeFileName={decodeFileName}
+              />
+            )}
+          </>
         )}
       </Modal>
 
@@ -240,368 +207,31 @@ export function PanelUpload({ service }) {
             position: 'fixed',
             bottom: 24,
             left: 24,
-            width: 300,
+            width: activeTab === 'json' ? 350 : 300,
             zIndex: 1000,
           }}
         >
-          <ProgressTracker
-            key={progressTrackerKeyRef.current}
-            clientId={currentClientId}
-            onComplete={handleProgressComplete}
-            isMinimized={true}
-            onToggleMinimize={toggleProgressMinimize}
-            decodeFileName={decodeFileName}
-          />
+          {activeTab === 'json' ? (
+            <JSONUploadProgress
+              key={`json-mini-${progressTrackerKeyRef.current}`}
+              clientId={currentClientId}
+              onComplete={handleProgressComplete}
+              isMinimized={true}
+              onToggleMinimize={toggleProgressMinimize}
+              decodeFileName={decodeFileName}
+            />
+          ) : (
+            <ProgressTracker
+              key={`ip-mini-${progressTrackerKeyRef.current}`}
+              clientId={currentClientId}
+              onComplete={handleProgressComplete}
+              isMinimized={true}
+              onToggleMinimize={toggleProgressMinimize}
+              decodeFileName={decodeFileName}
+            />
+          )}
         </div>
-      )}
-
-      {/* Кнопка для разворачивания свернутого прогресса */}
-      {progressVisible && isProgressMinimized && (
-        <FloatButton
-          icon={<ArrowsAltOutlined />}
-          type="primary"
-          style={{
-            right: 24,
-            bottom: 24,
-          }}
-          onClick={toggleProgressMinimize}
-          tooltip="Развернуть окно прогресса"
-        />
       )}
     </div>
   )
 }
-
-// import { useState, useRef, useCallback } from 'react'
-// import { Tabs, message, Modal, FloatButton } from 'antd'
-// import { MinusOutlined, ArrowsAltOutlined } from '@ant-design/icons'
-// import cn from './PanelUpload.module.scss'
-// import { UploadArea } from './UploadArea'
-// import { ExportButton } from '../ExportButton/ExportButton'
-// import { ProgressTracker } from '../ProgressTracker/ProgressTracker'
-
-// export function PanelUpload({ service }) {
-//   const [activeTab, setActiveTab] = useState('ip')
-//   const [fileList, setFileList] = useState([])
-//   const [uploading, setUploading] = useState(false)
-//   const [progressVisible, setProgressVisible] = useState(false)
-//   const [isProgressMinimized, setIsProgressMinimized] = useState(false)
-//   const [currentClientId, setCurrentClientId] = useState(null)
-//   const progressTrackerKeyRef = useRef(0)
-
-//   const handleTabChange = (key) => {
-//     setActiveTab(key)
-//     if (key !== 'export') {
-//       setFileList([])
-//     }
-//   }
-
-//   const generateClientId = useCallback(() => {
-//     return `client_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-//   }, [])
-
-//   const handleUpload = async (files) => {
-//     if (files.length === 0) {
-//       message.warning('Выберите файлы для загрузки')
-//       return
-//     }
-
-//     // Сбрасываем состояние минимизации при новой загрузке
-//     setIsProgressMinimized(false)
-
-//     const newClientId = generateClientId()
-//     setCurrentClientId(newClientId)
-//     progressTrackerKeyRef.current += 1
-//     setProgressVisible(true)
-
-//     // Даем время для подключения SSE
-//     await new Promise((resolve) => setTimeout(resolve, 500))
-
-//     const formData = new FormData()
-//     files.forEach((file) => {
-//       formData.append('files', file)
-//     })
-//     formData.append('clientId', newClientId)
-
-//     setUploading(true)
-
-//     try {
-//       const endpoint =
-//         activeTab === 'ip' ? '/files/upload/ip' : '/files/upload/json'
-
-//       const response = await service.uploadFiles(endpoint, formData, {
-//         headers: {
-//           'Content-Type': 'multipart/form-data',
-//         },
-//       })
-
-//       message.success(
-//         `Файлы успешно отправлены (${activeTab === 'ip' ? 'IP-адреса' : 'JSON-данные'})`
-//       )
-
-//       setFileList([])
-//     } catch (err) {
-//       console.error('Ошибка загрузки:', err)
-//       message.error(`Ошибка: ${err.response?.data?.message || err.message}`)
-//       setProgressVisible(false)
-//       setCurrentClientId(null)
-//     } finally {
-//       setUploading(false)
-//     }
-//   }
-
-//   const handleProgressComplete = (processedFiles) => {
-//     console.log('Обработка завершена:', processedFiles)
-//     message.success('Обработка всех файлов завершена!')
-
-//     // Автоматически закрываем через 5 секунд
-//     setTimeout(() => {
-//       setProgressVisible(false)
-//       setCurrentClientId(null)
-//       setIsProgressMinimized(false)
-//     }, 5000)
-//   }
-
-//   const handleModalClose = () => {
-//     setProgressVisible(false)
-//     setCurrentClientId(null)
-//     setIsProgressMinimized(false)
-//   }
-
-//   const toggleProgressMinimize = () => {
-//     setIsProgressMinimized(!isProgressMinimized)
-//   }
-
-//   const getUploadText = () => {
-//     switch (activeTab) {
-//       case 'ip':
-//         return 'Нажмите или перетащите файл с IP-адресами (.txt) в эту область'
-//       case 'json':
-//         return 'Нажмите или перетащите JSON-файл в эту область'
-//       default:
-//         return 'Нажмите или перетащите файл в эту область'
-//     }
-//   }
-
-//   const getUploadHint = () => {
-//     switch (activeTab) {
-//       case 'ip':
-//         return 'Поддерживаются только файлы с расширением .txt'
-//       case 'json':
-//         return 'Поддерживаются только файлы с расширением .json'
-//       default:
-//         return 'Поддерживаются файлы с определенными расширениями'
-//     }
-//   }
-
-//   return (
-//     <div className={cn['panel-upload']}>
-//       <h2>Админ панель</h2>
-
-//       <div className={cn['tabs-and-export']}>
-//         <Tabs
-//           activeKey={activeTab}
-//           onChange={handleTabChange}
-//           className={cn['upload-tabs']}
-//           size="small"
-//           items={[
-//             {
-//               label: 'IP-файл (.txt)',
-//               key: 'ip',
-//               children: null,
-//             },
-//             {
-//               label: 'JSON-отчёт (.json)',
-//               key: 'json',
-//               children: null,
-//             },
-//           ]}
-//         />
-//         <ExportButton service={service} />
-//       </div>
-
-//       <UploadArea
-//         activeTab={activeTab}
-//         fileList={fileList}
-//         setFileList={setFileList}
-//         uploading={uploading}
-//         onUpload={handleUpload}
-//         uploadText={getUploadText()}
-//         uploadHint={getUploadHint()}
-//       />
-
-//       {/* Модальное окно с прогрессом */}
-//       <Modal
-//         title={isProgressMinimized ? null : 'Обработка файлов'}
-//         open={progressVisible && !isProgressMinimized}
-//         onCancel={handleModalClose}
-//         footer={null}
-//         width={600}
-//         maskClosable={false}
-//         destroyOnClose={true}
-//         style={{
-//           top: 20,
-//           marginBottom: 20,
-//         }}
-//       >
-//         {currentClientId && (
-//           <ProgressTracker
-//             key={progressTrackerKeyRef.current}
-//             clientId={currentClientId}
-//             onComplete={handleProgressComplete}
-//             onToggleMinimize={toggleProgressMinimize}
-//           />
-//         )}
-//       </Modal>
-
-//       {/* Компактное отображение прогресса в углу экрана */}
-//       {progressVisible && isProgressMinimized && (
-//         <div
-//           style={{
-//             position: 'fixed',
-//             bottom: 24,
-//             left: 24,
-//             width: 300,
-//             zIndex: 1000,
-//           }}
-//         >
-//           <ProgressTracker
-//             key={progressTrackerKeyRef.current}
-//             clientId={currentClientId}
-//             onComplete={handleProgressComplete}
-//             isMinimized={true}
-//             onToggleMinimize={toggleProgressMinimize}
-//           />
-//         </div>
-//       )}
-
-//       {/* Кнопка для разворачивания свернутого прогресса */}
-//       {progressVisible && isProgressMinimized && (
-//         <FloatButton
-//           icon={<ArrowsAltOutlined />}
-//           type="primary"
-//           style={{
-//             right: 24,
-//             bottom: 24,
-//           }}
-//           onClick={toggleProgressMinimize}
-//           tooltip="Развернуть окно прогресса"
-//         />
-//       )}
-//     </div>
-//   )
-// }
-/****************************************************************** */
-// import { useState } from 'react'
-// import { Tabs, message } from 'antd'
-// import cn from './PanelUpload.module.scss'
-
-// // Импортируем специализированные компоненты
-// import { UploadArea } from './UploadArea'
-// import { ExportButton } from '../ExportButton/ExportButton'
-
-// export function PanelUpload({ service }) {
-//   const [activeTab, setActiveTab] = useState('ip') // 'ip', 'json', 'export'
-//   const [fileList, setFileList] = useState([])
-//   const [uploading, setUploading] = useState(false)
-
-//   const handleTabChange = (key) => {
-//     setActiveTab(key)
-//     if (key !== 'export') {
-//       setFileList([]) // очищаем список при смене таба (кроме export)
-//     }
-//   }
-
-//   const handleUpload = async (files) => {
-//     if (files.length === 0) {
-//       message.warning('Выберите файлы для загрузки')
-//       return
-//     }
-//     const formData = new FormData()
-//     files.forEach((file) => {
-//       formData.append('files', file)
-//     })
-//     setUploading(true)
-//     try {
-//       const endpoint =
-//         activeTab === 'ip' ? '/files/upload/ip' : '/files/upload/json'
-
-//       // Используем service для отправки
-//       const response = await service.uploadFiles(endpoint, formData)
-
-//       message.success(
-//         `Файлы успешно отправлены (${activeTab === 'ip' ? 'IP-адреса' : 'JSON-данные'})`
-//       )
-
-//       setFileList([]) // очищаем после отправки
-//     } catch (err) {
-//       console.error('Ошибка загрузки:', err)
-//       message.error(`Ошибка: ${err.response?.data?.message || err.message}`)
-//     } finally {
-//       setUploading(false)
-//     }
-//   }
-
-//   // Определяем текст в зависимости от активной вкладки
-//   const getUploadText = () => {
-//     switch (activeTab) {
-//       case 'ip':
-//         return 'Нажмите или перетащите файл с IP-адресами (.txt) в эту область'
-//       case 'json':
-//         return 'Нажмите или перетащите JSON-файл в эту область'
-//       default:
-//         return 'Нажмите или перетащите файл в эту область'
-//     }
-//   }
-
-//   // Определяем подсказку в зависимости от активной вкладки
-//   const getUploadHint = () => {
-//     switch (activeTab) {
-//       case 'ip':
-//         return 'Поддерживаются только файлы с расширением .txt'
-//       case 'json':
-//         return 'Поддерживаются только файлы с расширением .json'
-//       default:
-//         return 'Поддерживаются файлы с определенными расширениями'
-//     }
-//   }
-
-//   return (
-//     <div className={cn['panel-upload']}>
-//       <h2>Админ панель</h2>
-
-//       {/* Контейнер для табов и кнопки экспорта */}
-//       <div className={cn['tabs-and-export']}>
-//         <Tabs
-//           activeKey={activeTab}
-//           onChange={handleTabChange}
-//           className={cn['upload-tabs']}
-//           size="small"
-//           items={[
-//             {
-//               label: 'IP-файл (.txt)',
-//               key: 'ip',
-//               children: null,
-//             },
-//             {
-//               label: 'JSON-отчёт (.json)',
-//               key: 'json',
-//               children: null,
-//             },
-//           ]}
-//         />
-//         <ExportButton service={service} />
-//       </div>
-
-//       <UploadArea
-//         activeTab={activeTab}
-//         fileList={fileList}
-//         setFileList={setFileList}
-//         uploading={uploading}
-//         onUpload={handleUpload}
-//         uploadText={getUploadText()}
-//         uploadHint={getUploadHint()}
-//       />
-//     </div>
-//   )
-// }
