@@ -2,8 +2,20 @@ import fs from "fs";
 import path from "path";
 import archiver from "archiver"; // Добавлен импорт
 import FileService from "../services/files.service.js";
-import { Op } from 'sequelize';
-import { Host, Port, Whois, WhoisKey, WellKnownPort, sequelize, FileSource, Country, Priority, Grouping } from "../models/index.js";
+import { Op } from "sequelize";
+import {
+  Host,
+  Port,
+  Whois,
+  WhoisKey,
+  WellKnownPort,
+  sequelize,
+  FileSource,
+  Country,
+  Priority,
+  Grouping,
+  HostFileSource,
+} from "../models/index.js";
 
 // Хранилище для SSE соединений
 const sseConnections = new Map();
@@ -11,88 +23,93 @@ const sseConnections = new Map();
 export default class FileController {
   // Метод для SSE соединений
   static setupSSE(req, res) {
-      // Важно: не закрывать соединение сразу!
-      res.writeHead(200, {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-          'Access-Control-Allow-Origin': '*',
-      });
+    // Важно: не закрывать соединение сразу!
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "Access-Control-Allow-Origin": "*",
+    });
 
-      const clientId = req.query.clientId;
-      if (!clientId) {
-          console.error('❌ clientId не предоставлен в SSE запросе');
-          res.end();
-          return;
+    const clientId = req.query.clientId;
+    if (!clientId) {
+      console.error("❌ clientId не предоставлен в SSE запросе");
+      res.end();
+      return;
+    }
+
+    console.log(`✅ SSE подключен клиент ${clientId}`);
+
+    // Сохраняем соединение
+    sseConnections.set(clientId, res);
+
+    // Отправляем начальное сообщение
+    const initialMessage = {
+      type: "connected",
+      clientId: clientId,
+      message: "SSE соединение установлено",
+      timestamp: new Date().toISOString(),
+    };
+
+    res.write(`data: ${JSON.stringify(initialMessage)}\n\n`);
+
+    // Функция для проверки "живости" соединения
+    const keepAliveInterval = setInterval(() => {
+      try {
+        if (!res.writableEnded) {
+          res.write(
+            `data: ${JSON.stringify({
+              type: "keep-alive",
+              timestamp: new Date().toISOString(),
+            })}\n\n`
+          );
+        } else {
+          clearInterval(keepAliveInterval);
+        }
+      } catch (error) {
+        console.log(`❌ Ошибка отправки keep-alive клиенту ${clientId}`);
+        clearInterval(keepAliveInterval);
       }
+    }, 15000); // Каждые 15 секунд
 
-      console.log(`✅ SSE подключен клиент ${clientId}`);
-      
-      // Сохраняем соединение
-      sseConnections.set(clientId, res);
+    // Обработка отключения клиента
+    req.on("close", () => {
+      console.log(`❌ Клиент ${clientId} отключился от SSE`);
+      clearInterval(keepAliveInterval);
+      sseConnections.delete(clientId);
+    });
 
-      // Отправляем начальное сообщение
-      const initialMessage = {
-          type: 'connected',
-          clientId: clientId,
-          message: 'SSE соединение установлено',
-          timestamp: new Date().toISOString()
-      };
-      
-      res.write(`data: ${JSON.stringify(initialMessage)}\n\n`);
-
-      // Функция для проверки "живости" соединения
-      const keepAliveInterval = setInterval(() => {
-          try {
-              if (!res.writableEnded) {
-                  res.write(`data: ${JSON.stringify({ type: 'keep-alive', timestamp: new Date().toISOString() })}\n\n`);
-              } else {
-                  clearInterval(keepAliveInterval);
-              }
-          } catch (error) {
-              console.log(`❌ Ошибка отправки keep-alive клиенту ${clientId}`);
-              clearInterval(keepAliveInterval);
-          }
-      }, 15000); // Каждые 15 секунд
-
-      // Обработка отключения клиента
-      req.on('close', () => {
-          console.log(`❌ Клиент ${clientId} отключился от SSE`);
-          clearInterval(keepAliveInterval);
-          sseConnections.delete(clientId);
-      });
-
-      req.on('error', (error) => {
-          console.error(`❌ Ошибка SSE соединения с клиентом ${clientId}:`, error);
-          clearInterval(keepAliveInterval);
-          sseConnections.delete(clientId);
-      });
+    req.on("error", (error) => {
+      console.error(`❌ Ошибка SSE соединения с клиентом ${clientId}:`, error);
+      clearInterval(keepAliveInterval);
+      sseConnections.delete(clientId);
+    });
   }
 
   // Метод для отправки событий конкретному клиенту
   static sendProgressEvent(event) {
-      if (!event.clientId) {
-          console.error('❌ sendProgressEvent: clientId не указан', event);
-          return;
-      }
+    if (!event.clientId) {
+      console.error("❌ sendProgressEvent: clientId не указан", event);
+      return;
+    }
 
-      const message = `data: ${JSON.stringify(event)}\n\n`;
-      const clientId = event.clientId;
-      
-      console.log(`📤 Отправка события ${event.type} клиенту ${clientId}`);
+    const message = `data: ${JSON.stringify(event)}\n\n`;
+    const clientId = event.clientId;
 
-      const res = sseConnections.get(clientId);
-      if (res && !res.writableEnded) {
-          try {
-              res.write(message);
-              console.log(`✅ Событие ${event.type} отправлено клиенту ${clientId}`);
-          } catch (error) {
-              console.error(`❌ Ошибка отправки события клиенту ${clientId}:`, error);
-              sseConnections.delete(clientId);
-          }
-      } else {
-          console.warn(`⚠️ Клиент ${clientId} не найден или соединение закрыто`);
+    console.log(`📤 Отправка события ${event.type} клиенту ${clientId}`);
+
+    const res = sseConnections.get(clientId);
+    if (res && !res.writableEnded) {
+      try {
+        res.write(message);
+        console.log(`✅ Событие ${event.type} отправлено клиенту ${clientId}`);
+      } catch (error) {
+        console.error(`❌ Ошибка отправки события клиенту ${clientId}:`, error);
+        sseConnections.delete(clientId);
       }
+    } else {
+      console.warn(`⚠️ Клиент ${clientId} не найден или соединение закрыто`);
+    }
   }
 
   async handleFilesIP(req, res) {
@@ -100,7 +117,12 @@ export default class FileController {
   }
 
   async handleFilesJSON(req, res) {
-    await this.handleFilesWithProgress(req, res, "json", FileService.addedJSONfile);
+    await this.handleFilesWithProgress(
+      req,
+      res,
+      "json",
+      FileService.addedJSONfile.bind(FileService)
+    );
   }
 
   async handleFilesWithProgress(req, res, extension, serviceFunction) {
@@ -109,16 +131,17 @@ export default class FileController {
         return res.status(400).json({ error: "Файлы не переданы" });
       }
 
-      const clientId = req.body.clientId || req.query.clientId || 'default';
+      const clientId = req.body.clientId || req.query.clientId || "default";
       console.log(`🔄 Начало обработки файлов для клиента ${clientId}`);
       console.log(`📁 Количество файлов: ${req.files.length}`);
 
       // Отправляем событие начала обработки
       FileController.sendProgressEvent({
-        type: 'processing_started',
+        type: "processing_started",
         clientId,
         message: `Начата обработка ${req.files.length} файлов`,
-        timestamp: new Date().toISOString()
+        totalFiles: req.files.length,
+        timestamp: new Date().toISOString(),
       });
 
       const processedFiles = await Promise.all(
@@ -130,37 +153,41 @@ export default class FileController {
           try {
             if (path.extname(fileName).toLowerCase() === `.${extension}`) {
               const fileContent = await fs.promises.readFile(filePath, "utf-8");
-              
+
               // Отправляем событие начала обработки файла
               FileController.sendProgressEvent({
-                type: 'file_start',
+                type: "file_start",
                 clientId,
                 fileIndex,
                 fileName,
-                totalFiles: req.files.length,
-                timestamp: new Date().toISOString()
+                // totalFiles: req.files.length,
+                timestamp: new Date().toISOString(),
               });
 
               console.log(`📤 Вызов serviceFunction для ${fileName}`);
-              
+
               // Создаем callback для прогресса
               const progressCallback = (progress) => {
-                console.log(`📊 Прогресс для ${fileName}:`, progress);
+                console.log(`📊 Прогресс для ${fileName}:`)//, progress);
                 // Отправляем прогресс обработки IP
                 FileController.sendProgressEvent({
                   ...progress,
                   clientId,
                   fileIndex,
                   fileName,
-                  timestamp: new Date().toISOString()
+                  timestamp: new Date().toISOString(),
                 });
               };
 
               // Вызываем serviceFunction с fileName и callback
               let result;
-              if (extension === 'txt') {
+              if (extension === "txt") {
                 // Для IP файлов передаем fileName как второй параметр
-                result = await serviceFunction(fileContent, fileName, progressCallback);
+                result = await serviceFunction(
+                  fileContent,
+                  fileName,
+                  progressCallback
+                );
               } else {
                 // Для JSON файлов используем старый вызов
                 result = await serviceFunction(fileContent, progressCallback);
@@ -170,17 +197,20 @@ export default class FileController {
                 await fs.promises.unlink(filePath);
                 console.log(`✅ Файл удален: ${filePath}`);
               } catch (unlinkError) {
-                console.error(`❌ Ошибка удаления файла ${filePath}:`, unlinkError);
+                console.error(
+                  `❌ Ошибка удаления файла ${filePath}:`,
+                  unlinkError
+                );
               }
 
               // Отправляем событие завершения файла
               FileController.sendProgressEvent({
-                type: 'file_complete',
+                type: "file_complete",
                 clientId,
                 fileIndex,
                 fileName,
                 result,
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
               });
 
               console.log(`✅ Файл обработан: ${fileName}`);
@@ -191,7 +221,9 @@ export default class FileController {
                 result,
               };
             } else {
-              throw new Error(`Неподдерживаемый формат. Ожидается .${extension}`);
+              throw new Error(
+                `Неподдерживаемый формат. Ожидается .${extension}`
+              );
             }
           } catch (readError) {
             console.error(`❌ Ошибка чтения файла ${fileName}:`, readError);
@@ -199,113 +231,78 @@ export default class FileController {
               await fs.promises.unlink(filePath);
               console.log(`🗑️ Файл удален после ошибки: ${filePath}`);
             } catch (unlinkError) {
-              console.error(`❌ Ошибка удаления файла после ошибки:`, unlinkError);
+              console.error(
+                `❌ Ошибка удаления файла после ошибки:`,
+                unlinkError
+              );
             }
-            
+
             // Отправляем событие ошибки
             FileController.sendProgressEvent({
-              type: 'file_error',
+              type: "file_error",
               clientId,
               fileIndex,
               fileName,
               error: readError.message,
-              timestamp: new Date().toISOString()
+              timestamp: new Date().toISOString(),
             });
 
-            throw new Error(`Не удалось обработать файл: ${fileName} - ${readError.message}`);
+            // После обработки в handleFilesWithProgress добавьте:
+            console.log(`🔍 Проверка связей для файла ${fileName}...`);
+            const fileSourceCheck = await FileSource.findOne({
+              where: { name: fileName },
+              include: [
+                {
+                  model: Host,
+                  through: { attributes: [] },
+                },
+              ],
+            });
+
+            if (fileSourceCheck) {
+              console.log(
+                `📊 Файл "${fileName}" имеет ${fileSourceCheck.Hosts.length} связанных хостов`
+              );
+            } else {
+              console.warn(
+                `⚠️ Файл "${fileName}" не найден в базе после обработки`
+              );
+            }
+
+            throw new Error(
+              `Не удалось обработать файл: ${fileName} - ${readError.message}`
+            );
           }
         })
       );
 
       // Финальное событие
       FileController.sendProgressEvent({
-        type: 'all_complete',
+        type: "all_complete",
         clientId,
         processedFiles,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
 
       console.log(`🎉 Все файлы обработаны для клиента ${clientId}`);
 
-      res.status(200).json({ 
-        message: "Файлы успешно загружены и обработаны", 
-        files: processedFiles 
+      res.status(200).json({
+        message: "Файлы успешно загружены и обработаны",
+        files: processedFiles,
       });
     } catch (error) {
       console.error("❌ Ошибка при обработке загруженных файлов:", error);
-      
+
       FileController.sendProgressEvent({
-        type: 'processing_error',
-        clientId: req.body.clientId || req.query.clientId || 'default',
+        type: "processing_error",
+        clientId: req.body.clientId || req.query.clientId || "default",
         error: error.message,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
 
-      res.status(500).json({ 
+      res.status(500).json({
         error: "Ошибка сервера при обработке файлов",
-        details: error.message 
-      });
-    }
-  }
-
-  // СТАРЫЙ метод (для обратной совместимости) - можно удалить если не используется
-  async handleFiles(req, res, extension, serviceFunction) {
-    try {
-      if (!req.files || req.files.length === 0) {
-        return res.status(400).json({ error: "Файлы не переданы" });
-      }
-
-      const processedFiles = await Promise.all(
-        req.files.map(async (file) => {
-          const filePath = file.path;
-          const fileName = file.originalname;
-          console.log(`Обработка файла: ${fileName} в пути: ${filePath}`);
-
-          try {
-            const fileExtension = path.extname(fileName).toLowerCase();
-            if (fileExtension === `.${extension}`) {
-              const fileContent = await fs.promises.readFile(filePath, "utf-8");
-              const result = await serviceFunction(fileContent);
-
-              try {
-                await fs.promises.unlink(filePath);
-                console.log(`Файл удален: ${filePath}`);
-              } catch (unlinkError) {
-                console.error(`Ошибка при удалении файла ${filePath}:`, unlinkError);
-              }
-
-              return {
-                fileName,
-                message: "Файл успешно обработан и данные добавлены в базу",
-                result,
-              };
-            } else {
-              throw new Error(
-                `Неподдерживаемый формат файла. Ожидается .${extension}, получен ${fileExtension}`
-              );
-            }
-          } catch (readError) {
-            console.error(`Ошибка при чтении файла ${fileName}:`, readError);
-            try {
-              await fs.promises.unlink(filePath);
-              console.log(`Файл удален после ошибки: ${filePath}`);
-            } catch (unlinkError) {
-              console.error(`Ошибка при удалении файла ${filePath} после ошибки:`, unlinkError);
-            }
-            throw new Error(`Не удалось обработать файл: ${fileName} - ${readError.message}`);
-          }
-        })
-      );
-
-      res.status(200).json({ 
-        message: "Файлы успешно загружены и обработаны", 
-        files: processedFiles 
-      });
-    } catch (error) {
-      console.error("Ошибка при обработке загруженных файлов:", error);
-      res.status(500).json({ 
-        error: "Ошибка сервера при обработке файлов",
-        details: error.message 
+        details: error.message,
       });
     }
   }
@@ -325,8 +322,8 @@ export default class FileController {
 
       // Проверяем, есть ли ошибка в результате
       if (versionScanResult.error) {
-        return res.status(400).json({ 
-          error: `Ошибка при сканировании версий: ${versionScanResult.error}` 
+        return res.status(400).json({
+          error: `Ошибка при сканировании версий: ${versionScanResult.error}`,
         });
       }
 
@@ -341,39 +338,39 @@ export default class FileController {
     }
   }
 
-  async getFileDb(req, res) {
-    try {
-      const result = await FileService.getFileDb();
-      return res.json(result);
-    } catch (error) {
-      console.error("Ошибка в getFileDb:", error);
-      return res.status(500).json({ error: error.message });
-    }
-  }
+  // async getFileDb(req, res) {
+  //   try {
+  //     const result = await FileService.getFileDb();
+  //     return res.json(result);
+  //   } catch (error) {
+  //     console.error("Ошибка в getFileDb:", error);
+  //     return res.status(500).json({ error: error.message });
+  //   }
+  // }
 
   async getFileDbRange(req, res) {
     try {
       const { startDate, endDate } = req.query;
-      
+
       if (!startDate || !endDate) {
-        return res.status(400).json({ 
-          error: "Необходимо указать startDate и endDate" 
+        return res.status(400).json({
+          error: "Необходимо указать startDate и endDate",
         });
       }
 
       // Валидация дат
       const start = new Date(startDate);
       const end = new Date(endDate);
-      
+
       if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-        return res.status(400).json({ 
-          error: "Неверный формат даты. Используйте YYYY-MM-DD" 
+        return res.status(400).json({
+          error: "Неверный формат даты. Используйте YYYY-MM-DD",
         });
       }
 
       if (start > end) {
-        return res.status(400).json({ 
-          error: "startDate не может быть больше endDate" 
+        return res.status(400).json({
+          error: "startDate не может быть больше endDate",
         });
       }
 
@@ -385,387 +382,223 @@ export default class FileController {
     }
   }
 
-static async exportSingleFile(req, res) {
-  try {
-    const { fileName } = req.params;
-    const decodedFileName = decodeURIComponent(fileName);
-    
-    console.log(`📤 Экспорт файла по запросу: ${fileName}`);
-    console.log(`🔍 Декодированное имя: ${decodedFileName}`);
+  // controllers/FileController.js - исправьте экспортные методы
+  static async exportSingleFile(req, res) {
+    try {
+      const { fileName } = req.params;
 
-    // 1. Попробуем найти точное совпадение (похоже на запрос из логов)
-    const exactMatch = await FileSource.findOne({
-      where: {
-        name: decodedFileName
-      },
-      include: [{
-        model: Host,
+      console.log(`📤 Экспорт файла по запросу: "${fileName}"`);
+      console.log(`🔍 Длина имени файла: ${fileName.length} символов`);
+
+      // Преобразуем имя файла к тому формату, как оно сохраняется в базе
+      const searchFileName = fileName
+        .replace(/\[/g, "%5B")
+        .replace(/\]/g, "%5D")
+        .replace(/ /g, "%20")
+        .replace(/—/g, "%E2%80%94");
+
+      console.log(`🔍 Преобразованное имя для поиска: "${searchFileName}"`);
+
+      // 1. Пробуем найти файл по преобразованному имени
+      let fileSource = await FileSource.findOne({
+        where: { name: searchFileName },
         include: [
           {
-            model: Port,
-            include: [{
-              model: WellKnownPort,
-              attributes: ['name']
-            }]
+            model: Host,
+            through: { attributes: [] },
+            required: false,
+            include: [
+              {
+                model: Port,
+                include: [{ model: WellKnownPort, attributes: ["name"] }],
+              },
+              {
+                model: Whois,
+                include: [{ model: WhoisKey, attributes: ["key_name"] }],
+              },
+              {
+                model: Priority,
+                attributes: ["id", "name"],
+              },
+              {
+                model: Grouping,
+                attributes: ["id", "name"],
+              },
+              {
+                model: Country,
+                attributes: ["id", "name"],
+              },
+            ],
           },
-          {
-            model: Whois,
-            include: [{
-              model: WhoisKey,
-              attributes: ['key_name']
-            }]
-          },
-          {
-            model: Priority,
-            attributes: ['id', 'name']
-          },
-          {
-            model: Grouping,
-            attributes: ['id', 'name']
-          },
-          {
-            model: Country,
-            attributes: ['id', 'name']
-          }
-        ]
-      }]
-    });
-
-    if (exactMatch) {
-      console.log(`✅ Найдено точное совпадение: "${exactMatch.name}" (ID: ${exactMatch.id})`);
-      if (exactMatch.Hosts && exactMatch.Hosts.length > 0) {
-        return FileController.processAndExportFile(exactMatch, decodedFileName, res);
-      }
-    }
-
-    // 2. Если точного совпадения нет или у файла нет хостов, ищем среди файлов с хостами
-    console.log(`🔍 Точного совпадения не найдено, ищем среди файлов с хостами...`);
-    
-    const allFilesWithHosts = await FileSource.findAll({
-      attributes: ['id', 'name', 'uploaded_at'],
-      order: [['uploaded_at', 'DESC']],
-      include: [{
-        model: Host,
-        attributes: ['id'],
-        required: true // Только файлы с хостами
-      }]
-    });
-
-    console.log(`📋 Всего файлов с хостами: ${allFilesWithHosts.length}`);
-
-    if (allFilesWithHosts.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'В базе данных нет ни одного файла с хостами'
+        ],
       });
-    }
 
-    // 3. Ищем наиболее подходящий файл по имени
-    let bestMatch = null;
-    let bestScore = -1;
-    const requestedName = decodedFileName.toLowerCase();
-    
-    for (const file of allFilesWithHosts) {
-      const fileName = file.name.toLowerCase();
-      let score = 0;
-      
-      // Проверяем различные критерии совпадения
-      
-      // Точное совпадение (уже проверяли выше, но на всякий случай)
-      if (fileName === requestedName) {
-        score = 100;
-      }
-      
-      // Полное совпадение после удаления спецсимволов
-      const cleanFileName = fileName.replace(/[\[\]%\-—\s]/g, '');
-      const cleanRequestedName = requestedName.replace(/[\[\]%\-—\s]/g, '');
-      
-      if (cleanFileName === cleanRequestedName) {
-        score = Math.max(score, 90);
-      }
-      
-      // Содержит запрошенное имя
-      if (fileName.includes(requestedName)) {
-        score = Math.max(score, 80);
-      }
-      
-      // Запрошенное имя содержит имя файла
-      if (requestedName.includes(fileName)) {
-        score = Math.max(score, 70);
-      }
-      
-      // Совпадение по ключевым частям
-      const fileParts = fileName.split(/[\.\-_\s]/);
-      const requestedParts = requestedName.split(/[\.\-_\s]/);
-      
-      let commonParts = 0;
-      for (const part of requestedParts) {
-        if (part.length > 2 && fileParts.some(fp => fp.includes(part))) {
-          commonParts++;
-        }
-      }
-      
-      if (commonParts > 0) {
-        score = Math.max(score, 60 + commonParts * 5);
-      }
-      
-      // Отладочная информация
-      if (score > 0) {
-        console.log(`🔍 Файл "${file.name}": score=${score}`);
-      }
-      
-      if (score > bestScore) {
-        bestScore = score;
-        bestMatch = file;
-      }
-    }
+      // 2. Если не нашли, пробуем найти по оригинальному имени
+      if (!fileSource) {
+        console.log(`🔍 Пробуем найти по оригинальному имени: "${fileName}"`);
 
-    // 4. Если нашли подходящий файл, экспортируем его
-    if (bestMatch && bestScore > 0) {
-      console.log(`🎯 Выбран файл: "${bestMatch.name}" (ID: ${bestMatch.id}), score: ${bestScore}`);
-      
-      const fileSource = await FileSource.findOne({
-        where: { id: bestMatch.id },
-        include: [{
-          model: Host,
+        fileSource = await FileSource.findOne({
+          where: { name: fileName },
           include: [
             {
-              model: Port,
-              include: [{
-                model: WellKnownPort,
-                attributes: ['name']
-              }]
+              model: Host,
+              through: { attributes: [] },
+              required: false,
+              include: [
+                {
+                  model: Port,
+                  include: [{ model: WellKnownPort, attributes: ["name"] }],
+                },
+                {
+                  model: Whois,
+                  include: [{ model: WhoisKey, attributes: ["key_name"] }],
+                },
+                {
+                  model: Priority,
+                  attributes: ["id", "name"],
+                },
+                {
+                  model: Grouping,
+                  attributes: ["id", "name"],
+                },
+                {
+                  model: Country,
+                  attributes: ["id", "name"],
+                },
+              ],
             },
-            {
-              model: Whois,
-              include: [{
-                model: WhoisKey,
-                attributes: ['key_name']
-              }]
-            },
-            {
-              model: Priority,
-              attributes: ['id', 'name']
-            },
-            {
-              model: Grouping,
-              attributes: ['id', 'name']
-            },
-            {
-              model: Country,
-              attributes: ['id', 'name']
-            }
-          ]
-        }]
-      });
-      
-      if (fileSource.Hosts && fileSource.Hosts.length > 0) {
-        return FileController.processAndExportFile(fileSource, decodedFileName, res);
+          ],
+        });
       }
-    }
 
-    // 5. Если не нашли подходящего файла, покажем что есть в базе
-    const availableFiles = await FileSource.findAll({
-      attributes: ['id', 'name', 'uploaded_at'],
-      limit: 20,
-      order: [['uploaded_at', 'DESC']]
-    });
+      if (!fileSource) {
+        console.log(`❌ Файл не найден`);
 
-    return res.status(404).json({
-      success: false,
-      error: `Файл "${decodedFileName}" не найден в базе данных`,
-      requested_file: decodedFileName,
-      similar_files_found: availableFiles.map(f => f.name),
-      suggestion: 'Проверьте точное название файла или используйте экспорт всех файлов'
-    });
+        // Покажем все файлы для отладки
+        const allFiles = await FileSource.findAll({
+          attributes: ["id", "name"],
+          order: [["uploaded_at", "DESC"]],
+        });
 
-  } catch (error) {
-    console.error(`❌ Ошибка при экспорте файла:`, error);
-    
-    res.status(500).json({
-      success: false,
-      error: `Ошибка при экспорте файла: ${error.message}`,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-}
+        return res.status(404).json({
+          success: false,
+          error: `Файл не найден`,
+          requested_name: fileName,
+          search_attempt: searchFileName,
+          available_files: allFiles.map((f) => f.name),
+        });
+      }
 
-// Вспомогательная функция для обработки и экспорта файла
-   static async processAndExportFile(fileSource, requestedFileName, res) {
-    try {
-      console.log(`✅ Найден файл для экспорта: "${fileSource.name}", хостов: ${fileSource.Hosts.length}`);
-      
-      // Формируем структурированные данные
-      const formattedData = fileSource.Hosts.map(host => {
-        // Формируем данные портов
-        const portData = {
-          open: [],
-          filtered: []
-        };
+      console.log(
+        `✅ Найден файл: "${fileSource.name}" (ID: ${fileSource.id})`
+      );
+      console.log(
+        `📊 Количество связанных хостов: ${
+          fileSource.Hosts ? fileSource.Hosts.length : 0
+        }`
+      );
 
-        if (host.Ports && host.Ports.length > 0) {
-          host.Ports.forEach(port => {
-            const portInfo = {
-              port: port.port,
-              name: port.WellKnownPort ? port.WellKnownPort.name : null
-            };
+      // Форматируем данные
+      let formattedData = [];
 
-            if (port.type === 'open') {
-              portData.open.push(portInfo);
-            } else if (port.type === 'filtered') {
-              portData.filtered.push(portInfo);
-            }
-          });
-        }
+      if (fileSource.Hosts && fileSource.Hosts.length > 0) {
+        formattedData = FileService.formattedDataProcess(fileSource);
 
-        // Формируем данные WHOIS
-        const whoisData = [];
-        if (host.Whois && host.Whois.length > 0) {
-          host.Whois.forEach(whois => {
-            if (whois.WhoisKey && whois.WhoisKey.key_name) {
-              whoisData.push({
-                key: whois.WhoisKey.key_name,
-                value: whois.value
-              });
-            }
-          });
-        }
-
-        // Базовый объект хоста
-        const hostData = {
-          id: host.id,
-          ip: host.ip,
-          reachable: host.reachable,
-          updated_at: host.updated_at,
-          port_data: portData,
-          priority_info: {
-            priority: host.Priority ? {
-              id: host.Priority.id,
-              name: host.Priority.name
-            } : null,
-            grouping: host.Grouping ? {
-              id: host.Grouping.id,
-              name: host.Grouping.name
-            } : null,
-            country: host.Country ? {
-              id: host.Country.id,
-              name: host.Country.name
-            } : null
-          },
-          has_whois: host.Whois && host.Whois.length > 0
-        };
-
-        // Добавляем WHOIS данные, если они есть
-        if (whoisData.length > 0) {
-          // Преобразуем массив в объект для удобства
-          const whoisObject = {};
-          whoisData.forEach(item => {
-            whoisObject[item.key] = item.value;
-          });
-          hostData.whois = whoisObject;
-        }
-
-        return hostData;
-      });
+        console.log(
+          `✅ Данные отформатированы для ${formattedData.length} хостов`
+        );
+      } else {
+        console.log(
+          `ℹ️ У файла нет связанных хостов, data будет пустым массивом`
+        );
+      }
 
       // Создаем имя файла для экспорта
-      const exportFileName = `export_${fileSource.name.replace(/[^a-zA-Z0-9а-яА-ЯёЁ_\-\.]/g, '_')}_${Date.now()}.json`;
+      const exportFileName = `export_${fileSource.name.replace(
+        /[^a-zA-Z0-9а-яА-ЯёЁ_\-\.\s]/g,
+        "_"
+      )}_${Date.now()}.json`;
 
-      // Формируем полный ответ с метаданными
+      // Формируем полный ответ
       const exportResult = {
         success: true,
-        search_info: {
-          requested_file: requestedFileName,
-          found_file: fileSource.name,
-          file_id: fileSource.id,
-          match_type: fileSource.name === requestedFileName ? 'exact_match' : 'similar_match',
-          uploaded_at: fileSource.uploaded_at
+        meta: {
+          export_info: {
+            exported_at: new Date().toISOString(),
+            export_file_name: exportFileName,
+            format_version: "1.0",
+          },
+          file_info: {
+            file_id: fileSource.id,
+            file_name: fileSource.name,
+            uploaded_at: fileSource.uploaded_at,
+            encoding: fileSource.encoding,
+            created_at: fileSource.created_at,
+            updated_at: fileSource.updated_at,
+          },
+          search_info: {
+            requested_file: fileName,
+            found_file: fileSource.name,
+            match_type:
+              fileName === fileSource.name ? "exact_match" : "converted_match",
+            search_timestamp: new Date().toISOString(),
+          },
+          statistics: {
+            total_hosts: formattedData.length,
+            reachable_hosts: formattedData.filter((h) => h.reachable).length,
+            unreachable_hosts: formattedData.filter((h) => !h.reachable).length,
+            with_whois: formattedData.filter((h) => h.has_whois).length,
+            with_ports: formattedData.filter((h) => h.port_count.total > 0)
+              .length,
+            with_open_ports: formattedData.filter((h) => h.port_count.open > 0)
+              .length,
+          },
         },
-        file_info: {
-          file_id: fileSource.id,
-          file_name: fileSource.name,
-          file_name_decoded: decodeURIComponent(fileSource.name),
-          export_file_name: exportFileName,
-          uploaded_at: fileSource.uploaded_at,
-          encoding: fileSource.encoding,
-          exported_at: new Date().toISOString(),
-          total_hosts: formattedData.length,
-          reachable_hosts: formattedData.filter(h => h.reachable).length,
-          unreachable_hosts: formattedData.filter(h => !h.reachable).length,
-          hosts_with_whois: formattedData.filter(h => h.has_whois).length,
-          hosts_with_open_ports: formattedData.filter(h => h.port_data.open.length > 0).length
-        },
-        data: formattedData
+        data: formattedData,
       };
 
       // Настройка заголовков для скачивания файла
-      res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Content-Disposition', `attachment; filename="${exportFileName}"`);
-      
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${exportFileName}"`
+      );
+      res.setHeader("X-Export-File-Name", exportFileName);
+      res.setHeader("X-Total-Hosts", formattedData.length);
+      res.setHeader("X-Export-Date", new Date().toISOString());
+
       // Отправляем данные как файл для скачивания
+      console.log(
+        `📤 Отправка файла ${exportFileName} с ${formattedData.length} хостами`
+      );
       res.json(exportResult);
-
-      console.log(`✅ Экспорт завершен: ${exportFileName}, хостов: ${formattedData.length}`);
-
     } catch (error) {
-      console.error(`❌ Ошибка при обработке файла:`, error);
-      throw error;
+      console.error(`❌ Ошибка при экспорте файла:`, error);
+
+      res.status(500).json({
+        success: false,
+        error: `Ошибка при экспорте файла: ${error.message}`,
+        timestamp: new Date().toISOString(),
+      });
     }
   }
 
-// Вспомогательная функция для расчета совпадения
- static calculateMatchScore(fileName, searchName) {
-  let score = 0;
-  const fileNameLower = fileName.toLowerCase();
-  const searchNameLower = searchName.toLowerCase();
-  
-  // Точное совпадение
-  if (fileNameLower === searchNameLower) {
-    score += 100;
-  }
-  
-  // Совпадение без учета кодирования
-  if (fileNameLower.replace(/[\[\]%]/g, '') === searchNameLower.replace(/[\[\]%]/g, '')) {
-    score += 50;
-  }
-  
-  // Содержит искомое имя
-  if (fileNameLower.includes(searchNameLower)) {
-    score += 30;
-  }
-  
-  // Искомое имя содержит имя файла
-  if (searchNameLower.includes(fileNameLower)) {
-    score += 20;
-  }
-  
-  // Совпадение по ключевым словам
-  const keywords = ['test', 'ip_dst', 'ip'];
-  keywords.forEach(keyword => {
-    if (fileNameLower.includes(keyword) && searchNameLower.includes(keyword)) {
-      score += 10;
-    }
-  });
-  
-  return score;
-}
-
-
-  // В методе exportAllFiles исправьте вызов:
-// В методе exportAllFiles исправьте вызов:
-  static async exportAllFiles(req, res) {
+  // controllers/FileController.js - исправьте экспортные методы
+  static async exportAllFilesAsSingleJSON(req, res) {
     try {
-      console.log(`📤 Начало экспорта всех файлов в архив`);
-      
-      // Получаем все файлы с хостами, отсортированные по дате
+      console.log(`📤 Начало экспорта всех файлов как единый JSON`);
+
+      // Получаем все файлы с хостами
       const allFilesWithHosts = await FileSource.findAll({
-        attributes: ['id', 'name', 'uploaded_at', 'encoding'],
-        order: [['uploaded_at', 'DESC']],
-        include: [{
-          model: Host,
-          attributes: ['id'],
-          required: true // Только файлы с хостами
-        }]
+        attributes: ["id", "name", "uploaded_at", "encoding", "updated_at"],
+        order: [["uploaded_at", "DESC"]],
+        include: [
+          {
+            model: Host,
+            attributes: ["id"],
+            required: true,
+          },
+        ],
       });
 
       console.log(`📋 Всего файлов с хостами: ${allFilesWithHosts.length}`);
@@ -773,12 +606,632 @@ static async exportSingleFile(req, res) {
       if (allFilesWithHosts.length === 0) {
         return res.status(404).json({
           success: false,
-          error: 'В базе данных нет ни одного файла с хостами'
+          error: "В базе данных нет ни одного файла с хостами",
+        });
+      }
+
+      // Массив для хранения всех экспортированных файлов
+      const allFilesData = [];
+
+      // Обрабатываем каждый файл
+      for (let i = 0; i < allFilesWithHosts.length; i++) {
+        const fileSource = allFilesWithHosts[i];
+
+        console.log(
+          `📄 Обработка файла ${i + 1}/${allFilesWithHosts.length}: "${
+            fileSource.name
+          }"`
+        );
+
+        try {
+          // Получаем полные данные файла
+          const fullFileData = await FileSource.findOne({
+              where: { id: fileSource.id },
+              include: [
+                  {
+                      model: Host,
+                      include: [
+                          {
+                              model: Port,
+                              include: [
+                                  {
+                                      model: WellKnownPort,
+                                      attributes: ["name"],
+                                  },
+                              ],
+                          },
+                          {
+                              model: Whois,
+                              include: [
+                                  {
+                                      model: WhoisKey,
+                                      attributes: ["key_name"],
+                                  },
+                              ],
+                          },
+                          {
+                              model: Priority,
+                              attributes: ["id", "name"],
+                          },
+                          {
+                              model: Grouping,
+                              attributes: ["id", "name"],
+                          },
+                          {
+                              model: Country,
+                              attributes: ["id", "name"],
+                          },
+                          {
+                              model: FileSource, // ДОБАВИТЬ эту связь
+                              attributes: ["id"], // Только ID файлов
+                              through: { attributes: [] } // Не включать атрибуты промежуточной таблицы
+                          }
+                      ],
+                  },
+              ],
+          });
+
+          if (!fullFileData.Hosts || fullFileData.Hosts.length === 0) {
+            continue;
+          }
+
+          // Форматируем данные
+          const formattedData = FileService.formattedDataProcess(fullFileData);
+
+          // Статистика для файла
+          const hostStats = {
+            total: formattedData.length,
+            reachable: formattedData.filter((h) => h.reachable).length,
+            unreachable: formattedData.filter((h) => !h.reachable).length,
+            with_whois: formattedData.filter((h) => h.has_whois).length,
+            with_ports: formattedData.filter((h) => h.port_count.total > 0)
+              .length,
+            with_open_ports: formattedData.filter((h) => h.port_count.open > 0)
+              .length,
+          };
+
+          // Добавляем файл в общий массив
+          allFilesData.push({
+            file_info: {
+              file_id: fullFileData.id,
+              file_name: fullFileData.name,
+              uploaded_at: fullFileData.uploaded_at,
+              encoding: fullFileData.encoding,
+              updated_at: fullFileData.updated_at || fullFileData.uploaded_at,
+            },
+            statistics: hostStats,
+            data: formattedData,
+          });
+
+          console.log(
+            `✅ Файл обработан: "${fileSource.name}", хостов: ${formattedData.length}`
+          );
+        } catch (fileError) {
+          console.error(
+            `❌ Ошибка при обработке файла "${fileSource.name}":`,
+            fileError
+          );
+          // Добавляем файл с ошибкой
+          allFilesData.push({
+            file_info: {
+              file_id: fileSource.id,
+              file_name: fileSource.name,
+              uploaded_at: fileSource.uploaded_at,
+            },
+            error: fileError.message,
+            data: [],
+          });
+        }
+      }
+
+      // Общая статистика
+      const successfulFiles = allFilesData.filter((f) => !f.error);
+      const totalStats = {
+        total_files: allFilesData.length,
+        successful_files: successfulFiles.length,
+        failed_files: allFilesData.filter((f) => f.error).length,
+        total_hosts: successfulFiles.reduce(
+          (sum, file) => sum + (file.statistics?.total || 0),
+          0
+        ),
+        total_reachable_hosts: successfulFiles.reduce(
+          (sum, file) => sum + (file.statistics?.reachable || 0),
+          0
+        ),
+        total_unreachable_hosts: successfulFiles.reduce(
+          (sum, file) => sum + (file.statistics?.unreachable || 0),
+          0
+        ),
+      };
+
+      // Формируем финальный JSON
+      const exportResult = {
+        success: true,
+        meta: {
+          export_info: { //@TODO убрать везде
+            exported_at: new Date().toISOString(),
+            export_format: "single_json",
+            format_version: "1.0",
+          },
+          statistics: totalStats,
+        },
+        files: allFilesData,
+      };
+
+      // Создаем временную директорию
+      const tempDir = path.join(process.cwd(), "temp_exports");
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+
+      const timestamp = Date.now();
+      const exportFileName = `all_files_export_${timestamp}.json`;
+      const jsonFilePath = path.join(tempDir, exportFileName);
+      const zipFileName = `all_files_export_${timestamp}.zip`;
+      const zipFilePath = path.join(tempDir, zipFileName);
+
+      // Сохраняем JSON во временный файл
+      console.log(`💾 Сохранение JSON во временный файл: ${jsonFilePath}`);
+      fs.writeFileSync(
+        jsonFilePath,
+        JSON.stringify(exportResult, null, 2),
+        "utf8"
+      );
+
+      // Создаем ZIP архив с JSON файлом
+      console.log(`📦 Создание ZIP архива: ${zipFilePath}`);
+
+      return new Promise((resolve, reject) => {
+        const output = fs.createWriteStream(zipFilePath);
+        const archive = archiver("zip", {
+          zlib: { level: 9 },
+        });
+
+        output.on("close", () => {
+          console.log(
+            `✅ ZIP архив создан: ${zipFilePath}, размер: ${archive.pointer()} bytes`
+          );
+
+          // Настраиваем заголовки для скачивания
+          res.setHeader("Content-Type", "application/zip");
+          res.setHeader(
+            "Content-Disposition",
+            `attachment; filename="${zipFileName}"`
+          );
+          res.setHeader("Content-Length", archive.pointer());
+
+          // Отправляем архив
+          const archiveStream = fs.createReadStream(zipFilePath);
+          archiveStream.pipe(res);
+
+          // Очистка после отправки
+          archiveStream.on("end", () => {
+            try {
+              fs.unlinkSync(jsonFilePath);
+              fs.unlinkSync(zipFilePath);
+              console.log(`🧹 Временные файлы удалены`);
+            } catch (cleanupError) {
+              console.error(
+                "⚠️ Ошибка при очистке временных файлов:",
+                cleanupError
+              );
+            }
+            resolve();
+          });
+
+          archiveStream.on("error", (error) => {
+            console.error("❌ Ошибка при отправке архива:", error);
+            reject(error);
+          });
+        });
+
+        archive.on("warning", (err) => {
+          if (err.code === "ENOENT") {
+            console.warn("⚠️ Предупреждение archiver:", err);
+          } else {
+            reject(err);
+          }
+        });
+
+        archive.on("error", (err) => {
+          console.error("❌ Ошибка archiver:", err);
+          reject(err);
+        });
+
+        archive.pipe(output);
+
+        // Добавляем JSON файл в архив
+        archive.file(jsonFilePath, { name: exportFileName });
+
+        // Завершаем архивацию
+        archive.finalize();
+      });
+    } catch (error) {
+      console.error(`❌ Ошибка при экспорте всех файлов как JSON:`, error);
+
+      res.status(500).json({
+        success: false,
+        error: `Ошибка при экспорте всех файлов: ${error.message}`,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  // Экспорт данных по диапазону дат
+  static async exportDataByDateRange(req, res) {
+    try {
+      const { startDate, endDate } = req.query;
+
+      // Валидация параметров
+      if (!startDate || !endDate) {
+        return res.status(400).json({
+          success: false,
+          error: "Необходимо указать startDate и endDate параметры",
+        });
+      }
+
+      // Преобразуем строки в объекты Date
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        return res.status(400).json({
+          success: false,
+          error: "Неверный формат даты. Используйте YYYY-MM-DD",
+        });
+      }
+
+      // Корректируем endDate на конец дня
+      end.setHours(23, 59, 59, 999);
+
+      console.log(`📅 Экспорт данных за период: ${startDate} - ${endDate}`);
+
+      // Получаем файлы за указанный период
+      const filesInRange = await FileSource.findAll({
+        where: {
+          uploaded_at: {
+            [Op.between]: [start, end],
+          },
+        },
+        attributes: ["id", "name", "uploaded_at", "encoding", "updated_at"],
+        order: [["uploaded_at", "DESC"]],
+        include: [
+          {
+            model: Host,
+            attributes: ["id"],
+            required: true,
+          },
+        ],
+      });
+
+      console.log(`📋 Файлов за период: ${filesInRange.length}`);
+
+      if (filesInRange.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: `Нет файлов за указанный период (${startDate} - ${endDate})`,
+        });
+      }
+
+      // Массив для хранения всех экспортированных файлов
+      const allFilesData = [];
+
+      // Обрабатываем каждый файл
+      for (let i = 0; i < filesInRange.length; i++) {
+        const fileSource = filesInRange[i];
+
+        console.log(
+          `📄 Обработка файла ${i + 1}/${filesInRange.length}: "${
+            fileSource.name
+          }"`
+        );
+
+        try {
+          // Получаем полные данные файла (используем тот же запрос что и в exportAllFilesAsSingleJSON)
+          const fullFileData = await FileSource.findOne({
+            where: { id: fileSource.id },
+            include: [
+              {
+                model: Host,
+                include: [
+                  {
+                    model: Port,
+                    include: [
+                      {
+                        model: WellKnownPort,
+                        attributes: ["name"],
+                      },
+                    ],
+                  },
+                  {
+                    model: Whois,
+                    include: [
+                      {
+                        model: WhoisKey,
+                        attributes: ["key_name"],
+                      },
+                    ],
+                  },
+                  {
+                    model: Priority,
+                    attributes: ["id", "name"],
+                  },
+                  {
+                    model: Grouping,
+                    attributes: ["id", "name"],
+                  },
+                  {
+                    model: Country,
+                    attributes: ["id", "name"],
+                  },
+                ],
+              },
+            ],
+          });
+
+          if (!fullFileData.Hosts || fullFileData.Hosts.length === 0) {
+            continue;
+          }
+
+          // Форматируем данные
+          const formattedData = FileService.formattedDataProcess(fullFileData);
+
+          // Статистика для файла
+          const hostStats = {
+            total: formattedData.length,
+            reachable: formattedData.filter((h) => h.reachable).length,
+            unreachable: formattedData.filter((h) => !h.reachable).length,
+            with_whois: formattedData.filter((h) => h.has_whois).length,
+            with_ports: formattedData.filter((h) => h.port_count.total > 0)
+              .length,
+            with_open_ports: formattedData.filter((h) => h.port_count.open > 0)
+              .length,
+          };
+
+          // Добавляем файл в общий массив
+          allFilesData.push({
+            file_info: {
+              file_id: fullFileData.id,
+              file_name: fullFileData.name,
+              uploaded_at: fullFileData.uploaded_at,
+              encoding: fullFileData.encoding,
+              updated_at: fullFileData.updated_at || fullFileData.uploaded_at,
+            },
+            statistics: hostStats,
+            data: formattedData,
+          });
+
+          console.log(
+            `✅ Файл обработан: "${fileSource.name}", хостов: ${formattedData.length}`
+          );
+        } catch (fileError) {
+          console.error(
+            `❌ Ошибка при обработке файла "${fileSource.name}":`,
+            fileError
+          );
+          // Добавляем файл с ошибкой
+          allFilesData.push({
+            file_info: {
+              file_id: fileSource.id,
+              file_name: fileSource.name,
+              uploaded_at: fileSource.uploaded_at,
+            },
+            error: fileError.message,
+            data: [],
+          });
+        }
+      }
+
+      // Общая статистика
+      const successfulFiles = allFilesData.filter((f) => !f.error);
+      const totalStats = {
+        total_files: allFilesData.length,
+        successful_files: successfulFiles.length,
+        failed_files: allFilesData.filter((f) => f.error).length,
+        total_hosts: successfulFiles.reduce(
+          (sum, file) => sum + (file.statistics?.total || 0),
+          0
+        ),
+        total_reachable_hosts: successfulFiles.reduce(
+          (sum, file) => sum + (file.statistics?.reachable || 0),
+          0
+        ),
+        total_unreachable_hosts: successfulFiles.reduce(
+          (sum, file) => sum + (file.statistics?.unreachable || 0),
+          0
+        ),
+      };
+
+      // Формируем финальный JSON
+      const exportResult = {
+        success: true,
+        meta: {
+          export_info: {
+            exported_at: new Date().toISOString(),
+            export_format: "single_json",
+            format_version: "1.0",
+            date_range: {
+              start_date: startDate,
+              end_date: endDate,
+              start_iso: start.toISOString(),
+              end_iso: end.toISOString(),
+            },
+          },
+          statistics: totalStats,
+        },
+        files: allFilesData,
+      };
+
+      // Создаем временную директорию
+      const tempDir = path.join(process.cwd(), "temp_exports");
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+
+      const timestamp = Date.now();
+      const exportFileName = `export_${startDate}_to_${endDate}_${timestamp}.json`;
+      const jsonFilePath = path.join(tempDir, exportFileName);
+      const zipFileName = `export_${startDate}_to_${endDate}_${timestamp}.zip`;
+      const zipFilePath = path.join(tempDir, zipFileName);
+
+      // Сохраняем JSON во временный файл
+      console.log(`💾 Сохранение JSON во временный файл: ${jsonFilePath}`);
+      fs.writeFileSync(
+        jsonFilePath,
+        JSON.stringify(exportResult, null, 2),
+        "utf8"
+      );
+
+      // Создаем ZIP архив с JSON файлом
+      console.log(`📦 Создание ZIP архива: ${zipFilePath}`);
+
+      return new Promise((resolve, reject) => {
+        const output = fs.createWriteStream(zipFilePath);
+        const archive = archiver("zip", {
+          zlib: { level: 9 },
+        });
+
+        output.on("close", () => {
+          console.log(
+            `✅ ZIP архив создан: ${zipFilePath}, размер: ${archive.pointer()} bytes`
+          );
+
+          // Настраиваем заголовки для скачивания
+          res.setHeader("Content-Type", "application/zip");
+          res.setHeader(
+            "Content-Disposition",
+            `attachment; filename="${zipFileName}"`
+          );
+          res.setHeader("Content-Length", archive.pointer());
+
+          // Отправляем архив
+          const archiveStream = fs.createReadStream(zipFilePath);
+          archiveStream.pipe(res);
+
+          // Очистка после отправки
+          archiveStream.on("end", () => {
+            try {
+              fs.unlinkSync(jsonFilePath);
+              fs.unlinkSync(zipFilePath);
+              console.log(`🧹 Временные файлы удалены`);
+            } catch (cleanupError) {
+              console.error(
+                "⚠️ Ошибка при очистке временных файлов:",
+                cleanupError
+              );
+            }
+            resolve();
+          });
+
+          archiveStream.on("error", (error) => {
+            console.error("❌ Ошибка при отправке архива:", error);
+            reject(error);
+          });
+        });
+
+        archive.on("warning", (err) => {
+          if (err.code === "ENOENT") {
+            console.warn("⚠️ Предупреждение archiver:", err);
+          } else {
+            reject(err);
+          }
+        });
+
+        archive.on("error", (err) => {
+          console.error("❌ Ошибка archiver:", err);
+          reject(err);
+        });
+
+        archive.pipe(output);
+
+        // Добавляем JSON файл в архив
+        archive.file(jsonFilePath, { name: exportFileName });
+
+        // Завершаем архивацию
+        archive.finalize();
+      });
+    } catch (error) {
+      console.error(`❌ Ошибка при экспорте данных по диапазону дат:`, error);
+
+      res.status(500).json({
+        success: false,
+        error: `Ошибка при экспорте данных: ${error.message}`,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  // Вспомогательная функция для расчета совпадения
+  static calculateMatchScore(fileName, searchName) {
+    let score = 0;
+    const fileNameLower = fileName.toLowerCase();
+    const searchNameLower = searchName.toLowerCase();
+
+    // Точное совпадение
+    if (fileNameLower === searchNameLower) {
+      score += 100;
+    }
+
+    // Совпадение без учета кодирования
+    if (
+      fileNameLower.replace(/[\[\]%]/g, "") ===
+      searchNameLower.replace(/[\[\]%]/g, "")
+    ) {
+      score += 50;
+    }
+
+    // Содержит искомое имя
+    if (fileNameLower.includes(searchNameLower)) {
+      score += 30;
+    }
+
+    // Искомое имя содержит имя файла
+    if (searchNameLower.includes(fileNameLower)) {
+      score += 20;
+    }
+
+    // Совпадение по ключевым словам
+    const keywords = ["test", "ip_dst", "ip"];
+    keywords.forEach((keyword) => {
+      if (
+        fileNameLower.includes(keyword) &&
+        searchNameLower.includes(keyword)
+      ) {
+        score += 10;
+      }
+    });
+
+    return score;
+  }
+
+  static async exportAllFiles(req, res) {
+    try {
+      console.log(`📤 Начало экспорта всех файлов в архив`);
+
+      // Получаем все файлы с хостами, отсортированные по дате
+      const allFilesWithHosts = await FileSource.findAll({
+        attributes: ["id", "name", "uploaded_at", "encoding", "updated_at"],
+        order: [["updated_at", "DESC"]], // Сортируем по дате обновления
+        include: [
+          {
+            model: Host,
+            attributes: ["id"],
+            required: true, // Только файлы с хостами
+          },
+        ],
+      });
+
+      console.log(`📋 Всего файлов с хостами: ${allFilesWithHosts.length}`);
+
+      if (allFilesWithHosts.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "В базе данных нет ни одного файла с хостами",
         });
       }
 
       // Создаем временную директорию для файлов
-      const tempDir = path.join(process.cwd(), 'temp_exports');
+      const tempDir = path.join(process.cwd(), "temp_exports");
       if (!fs.existsSync(tempDir)) {
         fs.mkdirSync(tempDir, { recursive: true });
       }
@@ -795,151 +1248,119 @@ static async exportSingleFile(req, res) {
       // Обрабатываем каждый файл
       for (let i = 0; i < allFilesWithHosts.length; i++) {
         const fileSource = allFilesWithHosts[i];
-        
-        console.log(`📄 Экспорт файла ${i + 1}/${allFilesWithHosts.length}: "${fileSource.name}" (ID: ${fileSource.id})`);
+
+        console.log(
+          `📄 Экспорт файла ${i + 1}/${allFilesWithHosts.length}: "${
+            fileSource.name
+          }" (ID: ${fileSource.id}), обновлен: ${fileSource.updated_at}`
+        );
 
         try {
           // Получаем полные данные файла
           const fullFileData = await FileSource.findOne({
             where: { id: fileSource.id },
-            include: [{
-              model: Host,
-              include: [
-                {
-                  model: Port,
-                  include: [{
-                    model: WellKnownPort,
-                    attributes: ['name']
-                  }]
-                },
-                {
-                  model: Whois,
-                  include: [{
-                    model: WhoisKey,
-                    attributes: ['key_name']
-                  }]
-                },
-                {
-                  model: Priority,
-                  attributes: ['id', 'name']
-                },
-                {
-                  model: Grouping,
-                  attributes: ['id', 'name']
-                },
-                {
-                  model: Country,
-                  attributes: ['id', 'name']
-                }
-              ]
-            }]
+            include: [
+              {
+                model: Host,
+                include: [
+                  {
+                    model: Port,
+                    include: [
+                      {
+                        model: WellKnownPort,
+                        attributes: ["name"],
+                      },
+                    ],
+                  },
+                  {
+                    model: Whois,
+                    include: [
+                      {
+                        model: WhoisKey,
+                        attributes: ["key_name"],
+                      },
+                    ],
+                  },
+                  {
+                    model: Priority,
+                    attributes: ["id", "name"],
+                  },
+                  {
+                    model: Grouping,
+                    attributes: ["id", "name"],
+                  },
+                  {
+                    model: Country,
+                    attributes: ["id", "name"],
+                  },
+                ],
+              },
+            ],
           });
 
-          if (!fullFileData.Hosts || fullFileData.Hosts.length === 0) {
-            console.log(`⚠️ Файл "${fileSource.name}" не содержит хостов, пропускаем`);
+          if (
+            !fullFileData ||
+            !fullFileData.Hosts ||
+            fullFileData.Hosts.length === 0
+          ) {
+            console.log(
+              `⚠️ Файл "${fileSource.name}" не содержит хостов, пропускаем`
+            );
             continue;
           }
 
-          // Формируем структурированные данные
-          const formattedData = fullFileData.Hosts.map(host => {
-            // Формируем данные портов
-            const portData = {
-              open: [],
-              filtered: []
-            };
+          // Форматируем структурированные данные
+          const formattedData = FileService.formattedDataProcess(fullFileData);
 
-            if (host.Ports && host.Ports.length > 0) {
-              host.Ports.forEach(port => {
-                const portInfo = {
-                  port: port.port,
-                  name: port.WellKnownPort ? port.WellKnownPort.name : null
-                };
+          // Статистика для файла
+          const hostStats = {
+            total: formattedData.length,
+            reachable: formattedData.filter((h) => h.reachable).length,
+            unreachable: formattedData.filter((h) => !h.reachable).length,
+            with_whois: formattedData.filter((h) => h.has_whois).length,
+            with_ports: formattedData.filter(
+              (h) => h.ports && h.ports.all && h.ports.all.length > 0
+            ).length,
+            with_open_ports: formattedData.filter(
+              (h) => h.ports && h.ports.open && h.ports.open.length > 0
+            ).length,
+          };
 
-                if (port.type === 'open') {
-                  portData.open.push(portInfo);
-                } else if (port.type === 'filtered') {
-                  portData.filtered.push(portInfo);
-                }
-              });
-            }
-
-            // Формируем данные WHOIS
-            const whoisData = [];
-            if (host.Whois && host.Whois.length > 0) {
-              host.Whois.forEach(whois => {
-                if (whois.WhoisKey && whois.WhoisKey.key_name) {
-                  whoisData.push({
-                    key: whois.WhoisKey.key_name,
-                    value: whois.value
-                  });
-                }
-              });
-            }
-
-            // Базовый объект хоста
-            const hostData = {
-              id: host.id,
-              ip: host.ip,
-              reachable: host.reachable,
-              updated_at: host.updated_at,
-              port_data: portData,
-              priority_info: {
-                priority: host.Priority ? {
-                  id: host.Priority.id,
-                  name: host.Priority.name
-                } : null,
-                grouping: host.Grouping ? {
-                  id: host.Grouping.id,
-                  name: host.Grouping.name
-                } : null,
-                country: host.Country ? {
-                  id: host.Country.id,
-                  name: host.Country.name
-                } : null
-              },
-              has_whois: host.Whois && host.Whois.length > 0
-            };
-
-            // Добавляем WHOIS данные, если они есть
-            if (whoisData.length > 0) {
-              // Преобразуем массив в объект для удобства
-              const whoisObject = {};
-              whoisData.forEach(item => {
-                whoisObject[item.key] = item.value;
-              });
-              hostData.whois = whoisObject;
-            }
-
-            return hostData;
-          });
-
-          // Создаем имя файла для экспорта (без запрещенных символов)
-          const safeFileName = fileSource.name.replace(/[^a-zA-Z0-9а-яА-ЯёЁ_\-\.]/g, '_');
+          // Создаем имя файла для экспорта
+          const safeFileName = fileSource.name.replace(
+            /[^a-zA-Z0-9а-яА-ЯёЁ_\-\.\s]/g,
+            "_"
+          );
           const exportFileName = `${safeFileName}_export_${timestamp}.json`;
           const exportFilePath = path.join(exportDir, exportFileName);
 
           // Формируем полный ответ с метаданными
           const exportResult = {
             success: true,
-            file_info: {
-              file_id: fullFileData.id,
-              original_name: fullFileData.name,
-              decoded_name: decodeURIComponent(fullFileData.name),
-              export_file_name: exportFileName,
-              uploaded_at: fullFileData.uploaded_at,
-              encoding: fullFileData.encoding,
-              exported_at: new Date().toISOString(),
-              total_hosts: formattedData.length,
-              reachable_hosts: formattedData.filter(h => h.reachable).length,
-              unreachable_hosts: formattedData.filter(h => !h.reachable).length,
-              hosts_with_whois: formattedData.filter(h => h.has_whois).length,
-              hosts_with_open_ports: formattedData.filter(h => h.port_data.open.length > 0).length
+            meta: {
+              export_info: {
+                exported_at: new Date().toISOString(),
+                export_file_name: exportFileName,
+                format_version: "1.0",
+              },
+              file_info: {
+                file_id: fullFileData.id,
+                file_name: fullFileData.name,
+                uploaded_at: fullFileData.uploaded_at,
+                updated_at: fullFileData.updated_at,
+                encoding: fullFileData.encoding || "UTF-8",
+              },
+              statistics: hostStats,
             },
-            data: formattedData
+            data: formattedData,
           };
 
           // Сохраняем JSON файл
-          fs.writeFileSync(exportFilePath, JSON.stringify(exportResult, null, 2), 'utf8');
+          fs.writeFileSync(
+            exportFilePath,
+            JSON.stringify(exportResult, null, 2),
+            "utf8"
+          );
 
           // Добавляем информацию в summary
           exportSummary.push({
@@ -947,49 +1368,104 @@ static async exportSingleFile(req, res) {
             file_name: fullFileData.name,
             export_file_name: exportFileName,
             hosts_count: formattedData.length,
-            reachable_hosts: formattedData.filter(h => h.reachable).length,
-            unreachable_hosts: formattedData.filter(h => !h.reachable).length,
-            file_path: exportFilePath
+            reachable_hosts: formattedData.filter((h) => h.reachable).length,
+            unreachable_hosts: formattedData.filter((h) => !h.reachable).length,
+            last_updated: fullFileData.updated_at,
+            statistics: hostStats,
           });
 
-          console.log(`✅ Файл экспортирован: ${exportFileName}, хостов: ${formattedData.length}`);
-
+          console.log(
+            `✅ Файл экспортирован: ${exportFileName}, хостов: ${formattedData.length}`
+          );
         } catch (fileError) {
-          console.error(`❌ Ошибка при экспорте файла "${fileSource.name}":`, fileError);
-          // Продолжаем обработку остальных файлов
+          console.error(
+            `❌ Ошибка при экспорте файла "${fileSource.name}":`,
+            fileError.message
+          );
+          // Добавляем файл с ошибкой в summary
+          exportSummary.push({
+            file_id: fileSource.id,
+            file_name: fileSource.name,
+            export_file_name: null,
+            error: fileError.message,
+            hosts_count: 0,
+            reachable_hosts: 0,
+            unreachable_hosts: 0,
+          });
         }
       }
 
       if (exportSummary.length === 0) {
         // Очистка временной директории
         fs.rmSync(exportDir, { recursive: true, force: true });
-        
+
         return res.status(404).json({
           success: false,
-          error: 'Не удалось экспортировать ни одного файла'
+          error: "Не удалось экспортировать ни одного файла",
         });
       }
 
-      // Создаем summary файл
+      // Создаем summary файл с общей статистикой
+      const successfulExports = exportSummary.filter((f) => !f.error);
+
       const summaryData = {
         success: true,
-        exported_at: new Date().toISOString(),
-        total_files_exported: exportSummary.length,
-        total_hosts: exportSummary.reduce((sum, file) => sum + file.hosts_count, 0),
-        total_reachable_hosts: exportSummary.reduce((sum, file) => sum + file.reachable_hosts, 0),
-        total_unreachable_hosts: exportSummary.reduce((sum, file) => sum + file.unreachable_hosts, 0),
-        files: exportSummary.map(file => ({
+        meta: {
+          export_info: {
+            exported_at: new Date().toISOString(),
+            export_archive_name: `all_files_export_${timestamp}.zip`,
+            format_version: "1.0",
+            total_files_processed: exportSummary.length,
+            successfully_exported: successfulExports.length,
+            failed_exports: exportSummary.filter((f) => f.error).length,
+          },
+          statistics: {
+            total_files: successfulExports.length,
+            total_hosts: successfulExports.reduce(
+              (sum, file) => sum + file.hosts_count,
+              0
+            ),
+            total_reachable_hosts: successfulExports.reduce(
+              (sum, file) => sum + file.reachable_hosts,
+              0
+            ),
+            total_unreachable_hosts: successfulExports.reduce(
+              (sum, file) => sum + file.unreachable_hosts,
+              0
+            ),
+            total_with_whois: successfulExports.reduce(
+              (sum, file) => sum + (file.statistics?.with_whois || 0),
+              0
+            ),
+            total_with_ports: successfulExports.reduce(
+              (sum, file) => sum + (file.statistics?.with_ports || 0),
+              0
+            ),
+          },
+        },
+        files: exportSummary.map((file) => ({
           file_id: file.file_id,
           original_name: file.file_name,
           export_file_name: file.export_file_name,
+          success: !file.error,
+          error: file.error,
           hosts_count: file.hosts_count,
           reachable_hosts: file.reachable_hosts,
-          unreachable_hosts: file.unreachable_hosts
-        }))
+          unreachable_hosts: file.unreachable_hosts,
+          last_updated: file.last_updated,
+          statistics: file.statistics,
+        })),
       };
 
-      const summaryPath = path.join(exportDir, `export_summary_${timestamp}.json`);
-      fs.writeFileSync(summaryPath, JSON.stringify(summaryData, null, 2), 'utf8');
+      const summaryPath = path.join(
+        exportDir,
+        `export_summary_${timestamp}.json`
+      );
+      fs.writeFileSync(
+        summaryPath,
+        JSON.stringify(summaryData, null, 2),
+        "utf8"
+      );
 
       // Создаем ZIP архив
       const archiveFileName = `all_files_export_${timestamp}.zip`;
@@ -997,51 +1473,59 @@ static async exportSingleFile(req, res) {
 
       return new Promise((resolve, reject) => {
         const output = fs.createWriteStream(archivePath);
-        const archive = archiver('zip', {
-          zlib: { level: 9 } // Максимальное сжатие
+        const archive = archiver("zip", {
+          zlib: { level: 9 },
         });
 
-        output.on('close', () => {
-          console.log(`✅ ZIP архив создан: ${archivePath}, размер: ${archive.pointer()} bytes`);
-          
+        output.on("close", () => {
+          console.log(
+            `✅ ZIP архив создан: ${archivePath}, размер: ${archive.pointer()} bytes`
+          );
+
           // Настраиваем заголовки для скачивания
-          res.setHeader('Content-Type', 'application/zip');
-          res.setHeader('Content-Disposition', `attachment; filename="${archiveFileName}"`);
-          res.setHeader('Content-Length', archive.pointer());
+          res.setHeader("Content-Type", "application/zip");
+          res.setHeader(
+            "Content-Disposition",
+            `attachment; filename="${archiveFileName}"`
+          );
+          res.setHeader("Content-Length", archive.pointer());
 
           // Отправляем архив
           const archiveStream = fs.createReadStream(archivePath);
           archiveStream.pipe(res);
 
           // Очистка после отправки
-          archiveStream.on('end', () => {
+          archiveStream.on("end", () => {
             // Удаляем временные файлы
             try {
               fs.rmSync(exportDir, { recursive: true, force: true });
               fs.unlinkSync(archivePath);
               console.log(`🧹 Временные файлы удалены`);
             } catch (cleanupError) {
-              console.error('⚠️ Ошибка при очистке временных файлов:', cleanupError);
+              console.error(
+                "⚠️ Ошибка при очистке временных файлов:",
+                cleanupError
+              );
             }
             resolve();
           });
 
-          archiveStream.on('error', (error) => {
-            console.error('❌ Ошибка при отправке архива:', error);
+          archiveStream.on("error", (error) => {
+            console.error("❌ Ошибка при отправке архива:", error);
             reject(error);
           });
         });
 
-        archive.on('warning', (err) => {
-          if (err.code === 'ENOENT') {
-            console.warn('⚠️ Предупреждение archiver:', err);
+        archive.on("warning", (err) => {
+          if (err.code === "ENOENT") {
+            console.warn("⚠️ Предупреждение archiver:", err);
           } else {
             reject(err);
           }
         });
 
-        archive.on('error', (err) => {
-          console.error('❌ Ошибка archiver:', err);
+        archive.on("error", (err) => {
+          console.error("❌ Ошибка archiver:", err);
           reject(err);
         });
 
@@ -1049,334 +1533,405 @@ static async exportSingleFile(req, res) {
 
         // Добавляем все файлы из exportDir в архив
         archive.directory(exportDir, false);
-        
+
         // Завершаем архивацию
         archive.finalize();
       });
-
     } catch (error) {
       console.error(`❌ Ошибка при экспорте всех файлов:`, error);
-      
-      // Отправляем JSON ошибки даже при ошибке
+
       res.status(500).json({
         success: false,
         error: `Ошибка при экспорте всех файлов: ${error.message}`,
-        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        timestamp: new Date().toISOString(),
       });
     }
   }
 
-    // Альтернативный метод для получения всех файлов как JSON (без архивации)
-// Альтернативный метод для получения всех файлов как JSON (без архивации)
-  static async exportAllFilesAsJSON(req, res) {
-    try {
-      console.log(`📤 Начало экспорта всех файлов как JSON`);
-      
-      // Получаем ВСЕ файлы, включая те, у которых нет хостов
-      const allFiles = await FileSource.findAll({
-        attributes: ['id', 'name', 'uploaded_at', 'encoding'],
-        order: [['uploaded_at', 'DESC']],
-        include: [{
-          model: Host,
-          attributes: ['id'],
-          required: false // Включаем файлы даже без хостов
-        }]
-      });
+  // // Альтернативный метод для получения всех файлов как JSON (без архивации)
+  // static async exportAllFilesAsSingleJSON(req, res) {
+  //   try {
+  //     console.log(`📤 Начало экспорта всех файлов как единый JSON`);
 
-      console.log(`📋 Всего файлов в базе: ${allFiles.length}`);
+  //     // Получаем все файлы с хостами
+  //     const allFilesWithHosts = await FileSource.findAll({
+  //       attributes: ["id", "name", "uploaded_at", "encoding", "updated_at"],
+  //       order: [["uploaded_at", "DESC"]],
+  //       include: [
+  //         {
+  //           model: Host,
+  //           attributes: ["id"],
+  //           required: true,
+  //         },
+  //       ],
+  //     });
 
-      if (allFiles.length === 0) {
-        return res.status(404).json({
-          success: false,
-          error: 'В базе данных нет ни одного файла'
-        });
-      }
+  //     console.log(`📋 Всего файлов с хостами: ${allFilesWithHosts.length}`);
 
-      // Массив для хранения экспортированных файлов
-      const exportedFiles = [];
+  //     if (allFilesWithHosts.length === 0) {
+  //       return res.status(404).json({
+  //         success: false,
+  //         error: "В базе данных нет ни одного файла с хостами",
+  //       });
+  //     }
 
-      // Обрабатываем каждый файл
-      for (let i = 0; i < allFiles.length; i++) {
-        const fileSource = allFiles[i];
-        
-        console.log(`📄 Обработка файла ${i + 1}/${allFiles.length}: "${fileSource.name}"`);
+  //     // Массив для хранения всех экспортированных файлов
+  //     const allFilesData = [];
 
-        try {
-          // Получаем полные данные файла, включая ВСЕ хосты
-          const fullFileData = await FileSource.findOne({
-            where: { id: fileSource.id },
-            include: [{
-              model: Host,
-              include: [
-                {
-                  model: Port,
-                  include: [{
-                    model: WellKnownPort,
-                    attributes: ['name']
-                  }]
-                },
-                {
-                  model: Whois,
-                  include: [{
-                    model: WhoisKey,
-                    attributes: ['key_name']
-                  }]
-                },
-                {
-                  model: Priority,
-                  attributes: ['id', 'name']
-                },
-                {
-                  model: Grouping,
-                  attributes: ['id', 'name']
-                },
-                {
-                  model: Country,
-                  attributes: ['id', 'name']
-                }
-              ]
-            }]
-          });
+  //     // Обрабатываем каждый файл
+  //     for (let i = 0; i < allFilesWithHosts.length; i++) {
+  //       const fileSource = allFilesWithHosts[i];
 
-          // Формируем структурированные данные для ВСЕХ хостов (даже если их нет)
-          let formattedData = [];
-          
-          if (fullFileData.Hosts && fullFileData.Hosts.length > 0) {
-            formattedData = fullFileData.Hosts.map(host => {
-              // Формируем данные портов (всегда есть объект)
-              const portData = {
-                open: [],
-                filtered: []
-              };
+  //       console.log(
+  //         `📄 Обработка файла ${i + 1}/${allFilesWithHosts.length}: "${
+  //           fileSource.name
+  //         }"`
+  //       );
 
-              if (host.Ports && host.Ports.length > 0) {
-                host.Ports.forEach(port => {
-                  const portInfo = {
-                    port: port.port,
-                    name: port.WellKnownPort ? port.WellKnownPort.name : null
-                  };
+  //       try {
+  //         // Получаем полные данные файла
+  //         const fullFileData = await FileSource.findOne({
+  //           where: { id: fileSource.id },
+  //           include: [
+  //             {
+  //               model: Host,
+  //               include: [
+  //                 {
+  //                   model: Port,
+  //                   include: [
+  //                     {
+  //                       model: WellKnownPort,
+  //                       attributes: ["name"],
+  //                     },
+  //                   ],
+  //                 },
+  //                 {
+  //                   model: Whois,
+  //                   include: [
+  //                     {
+  //                       model: WhoisKey,
+  //                       attributes: ["key_name"],
+  //                     },
+  //                   ],
+  //                 },
+  //                 {
+  //                   model: Priority,
+  //                   attributes: ["id", "name"],
+  //                 },
+  //                 {
+  //                   model: Grouping,
+  //                   attributes: ["id", "name"],
+  //                 },
+  //                 {
+  //                   model: Country,
+  //                   attributes: ["id", "name"],
+  //                 },
+  //               ],
+  //             },
+  //           ],
+  //         });
 
-                  if (port.type === 'open') {
-                    portData.open.push(portInfo);
-                  } else if (port.type === 'filtered') {
-                    portData.filtered.push(portInfo);
-                  }
-                });
-              }
+  //         if (!fullFileData.Hosts || fullFileData.Hosts.length === 0) {
+  //           continue;
+  //         }
 
-              // Формируем данные WHOIS (всегда есть объект)
-              const whoisData = [];
-              if (host.Whois && host.Whois.length > 0) {
-                host.Whois.forEach(whois => {
-                  if (whois.WhoisKey && whois.WhoisKey.key_name) {
-                    whoisData.push({
-                      key: whois.WhoisKey.key_name,
-                      value: whois.value
-                    });
-                  }
-                });
-              }
+  //         // Форматируем данные (такая же структура как в exportSingleFile)
+  //         const formattedData = fullFileData.Hosts.map((host) => {
+  //           // Формируем данные портов
+  //           const portData = {
+  //             open: [],
+  //             filtered: [],
+  //             all: [],
+  //           };
 
-              // Базовый объект хоста (все поля всегда присутствуют)
-              const hostData = {
-                id: host.id,
-                ip: host.ip,
-                reachable: host.reachable !== undefined ? host.reachable : false,
-                updated_at: host.updated_at,
-                port_data: portData,
-                priority_info: {
-                  priority: host.Priority ? {
-                    id: host.Priority.id,
-                    name: host.Priority.name
-                  } : null,
-                  grouping: host.Grouping ? {
-                    id: host.Grouping.id,
-                    name: host.Grouping.name
-                  } : null,
-                  country: host.Country ? {
-                    id: host.Country.id,
-                    name: host.Country.name
-                  } : null
-                },
-                has_whois: host.Whois && host.Whois.length > 0,
-                whois: {} // всегда есть объект
-              };
+  //           if (host.Ports && host.Ports.length > 0) {
+  //             host.Ports.forEach((port) => {
+  //               const portInfo = {
+  //                 port: port.port,
+  //                 state: port.type || "unknown",
+  //                 service: port.WellKnownPort ? port.WellKnownPort.name : null,
+  //                 protocol: port.protocol || "tcp",
+  //                 created_at: port.created_at,
+  //                 updated_at: port.updated_at,
+  //               };
 
-              // Добавляем WHOIS данные, если они есть
-              if (whoisData.length > 0) {
-                const whoisObject = {};
-                whoisData.forEach(item => {
-                  whoisObject[item.key] = item.value;
-                });
-                hostData.whois = whoisObject;
-              }
+  //               if (port.type === "open") {
+  //                 portData.open.push(portInfo);
+  //               } else if (port.type === "filtered") {
+  //                 portData.filtered.push(portInfo);
+  //               }
+  //               portData.all.push(portInfo);
+  //             });
+  //           }
 
-              return hostData;
-            });
-          }
+  //           // Формируем данные WHOIS
+  //           const whoisData = [];
+  //           if (host.Whois && host.Whois.length > 0) {
+  //             host.Whois.forEach((whois) => {
+  //               if (whois.WhoisKey && whois.WhoisKey.key_name) {
+  //                 whoisData.push({
+  //                   key: whois.WhoisKey.key_name,
+  //                   value: whois.value,
+  //                   created_at: whois.created_at,
+  //                 });
+  //               }
+  //             });
+  //           }
 
-          // Добавляем файл в результат (даже если хостов нет)
-          exportedFiles.push({
-            file_id: fullFileData.id,
-            file_name: fullFileData.name,
-            file_name_decoded: decodeURIComponent(fullFileData.name),
-            uploaded_at: fullFileData.uploaded_at,
-            encoding: fullFileData.encoding,
-            hosts_count: formattedData.length,
-            reachable_hosts: formattedData.filter(h => h.reachable).length,
-            unreachable_hosts: formattedData.filter(h => !h.reachable).length,
-            hosts_with_ports: formattedData.filter(h => h.port_data.open.length > 0 || h.port_data.filtered.length > 0).length,
-            hosts_with_whois: formattedData.filter(h => Object.keys(h.whois).length > 0).length,
-            data: formattedData // будет пустым массивом если хостов нет
-          });
+  //           // Базовый объект хоста
+  //           const hostData = {
+  //             id: host.id,
+  //             ip: host.ip,
+  //             reachable: host.reachable !== undefined ? host.reachable : false,
+  //             last_checked: host.updated_at,
+  //             created_at: host.created_at,
+  //             ports: portData,
+  //             priority_info: {
+  //               priority: host.Priority
+  //                 ? {
+  //                     id: host.Priority.id,
+  //                     name: host.Priority.name,
+  //                     created_at: host.Priority.created_at,
+  //                   }
+  //                 : null,
+  //               grouping: host.Grouping
+  //                 ? {
+  //                     id: host.Grouping.id,
+  //                     name: host.Grouping.name,
+  //                     created_at: host.Grouping.created_at,
+  //                   }
+  //                 : null,
+  //               country: host.Country
+  //                 ? {
+  //                     id: host.Country.id,
+  //                     name: host.Country.name,
+  //                     code: host.Country.code || null,
+  //                     created_at: host.Country.created_at,
+  //                   }
+  //                 : null,
+  //             },
+  //             has_whois: whoisData.length > 0,
+  //             whois_count: whoisData.length,
+  //             port_count: {
+  //               total: portData.all.length,
+  //               open: portData.open.length,
+  //               filtered: portData.filtered.length,
+  //             },
+  //           };
 
-          console.log(`✅ Файл обработан: "${fileSource.name}", хостов: ${formattedData.length}`);
+  //           // Добавляем WHOIS данные, если они есть
+  //           if (whoisData.length > 0) {
+  //             const whoisObject = {};
+  //             whoisData.forEach((item) => {
+  //               whoisObject[item.key] = item.value;
+  //             });
+  //             hostData.whois = whoisObject;
+  //             hostData.whois_details = whoisData;
+  //           }
 
-        } catch (fileError) {
-          console.error(`❌ Ошибка при обработке файла "${fileSource.name}":`, fileError);
-          
-          // Добавляем файл с ошибкой (чтобы не терять информацию)
-          exportedFiles.push({
-            file_id: fileSource.id,
-            file_name: fileSource.name,
-            file_name_decoded: decodeURIComponent(fileSource.name),
-            uploaded_at: fileSource.uploaded_at,
-            encoding: fileSource.encoding,
-            error: fileError.message,
-            hosts_count: 0,
-            reachable_hosts: 0,
-            unreachable_hosts: 0,
-            hosts_with_ports: 0,
-            hosts_with_whois: 0,
-            data: []
-          });
-        }
-      }
+  //           return hostData;
+  //         });
 
-      // Формируем финальный ответ
-      const exportResult = {
-        success: true,
-        exported_at: new Date().toISOString(),
-        total_files: exportedFiles.length,
-        files_with_hosts: exportedFiles.filter(f => f.hosts_count > 0).length,
-        files_without_hosts: exportedFiles.filter(f => f.hosts_count === 0).length,
-        total_hosts: exportedFiles.reduce((sum, file) => sum + file.hosts_count, 0),
-        total_reachable_hosts: exportedFiles.reduce((sum, file) => sum + file.reachable_hosts, 0),
-        total_unreachable_hosts: exportedFiles.reduce((sum, file) => sum + file.unreachable_hosts, 0),
-        files: exportedFiles
-      };
+  //         // Статистика для файла
+  //         const hostStats = {
+  //           total: formattedData.length,
+  //           reachable: formattedData.filter((h) => h.reachable).length,
+  //           unreachable: formattedData.filter((h) => !h.reachable).length,
+  //           with_whois: formattedData.filter((h) => h.has_whois).length,
+  //           with_ports: formattedData.filter((h) => h.port_count.total > 0)
+  //             .length,
+  //           with_open_ports: formattedData.filter((h) => h.port_count.open > 0)
+  //             .length,
+  //         };
 
-      // Создаем временную директорию
-      const tempDir = path.join(process.cwd(), 'temp_exports');
-      if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
-      }
+  //         // Добавляем файл в общий массив
+  //         allFilesData.push({
+  //           file_info: {
+  //             file_id: fullFileData.id,
+  //             file_name: fullFileData.name,
+  //             uploaded_at: fullFileData.uploaded_at,
+  //             encoding: fullFileData.encoding,
+  //             updated_at: fullFileData.updated_at || "UTF-8",
+  //           },
+  //           statistics: hostStats,
+  //           data: formattedData,
+  //         });
 
-      const timestamp = Date.now();
-      const exportFileName = `all_files_export_${timestamp}.json`;
-      const jsonFilePath = path.join(tempDir, exportFileName);
-      const zipFileName = `all_files_export_${timestamp}.zip`;
-      const zipFilePath = path.join(tempDir, zipFileName);
+  //         console.log(
+  //           `✅ Файл обработан: "${fileSource.name}", хостов: ${formattedData.length}`
+  //         );
+  //       } catch (fileError) {
+  //         console.error(
+  //           `❌ Ошибка при обработке файла "${fileSource.name}":`,
+  //           fileError
+  //         );
+  //         // Добавляем файл с ошибкой
+  //         allFilesData.push({
+  //           file_info: {
+  //             file_id: fileSource.id,
+  //             file_name: fileSource.name,
+  //             uploaded_at: fileSource.uploaded_at,
+  //           },
+  //           error: fileError.message,
+  //           data: [],
+  //         });
+  //       }
+  //     }
 
-      // Сохраняем JSON во временный файл
-      console.log(`💾 Сохранение JSON во временный файл: ${jsonFilePath}`);
-      fs.writeFileSync(jsonFilePath, JSON.stringify(exportResult, null, 2), 'utf8');
+  //     // Общая статистика
+  //     const successfulFiles = allFilesData.filter((f) => !f.error);
+  //     const totalStats = {
+  //       total_files: allFilesData.length,
+  //       successful_files: successfulFiles.length,
+  //       failed_files: allFilesData.filter((f) => f.error).length,
+  //       total_hosts: successfulFiles.reduce(
+  //         (sum, file) => sum + (file.statistics?.total || 0),
+  //         0
+  //       ),
+  //       total_reachable_hosts: successfulFiles.reduce(
+  //         (sum, file) => sum + (file.statistics?.reachable || 0),
+  //         0
+  //       ),
+  //       total_unreachable_hosts: successfulFiles.reduce(
+  //         (sum, file) => sum + (file.statistics?.unreachable || 0),
+  //         0
+  //       ),
+  //     };
 
-      // Создаем ZIP архив с JSON файлом
-      console.log(`📦 Создание ZIP архива: ${zipFilePath}`);
-      
-      return new Promise((resolve, reject) => {
-        const output = fs.createWriteStream(zipFilePath);
-        const archive = archiver('zip', {
-          zlib: { level: 9 }
-        });
+  //     // Формируем финальный JSON
+  //     const exportResult = {
+  //       success: true,
+  //       meta: {
+  //         export_info: {
+  //           exported_at: new Date().toISOString(),
+  //           export_format: "single_json",
+  //           format_version: "1.0",
+  //         },
+  //         statistics: totalStats,
+  //       },
+  //       files: allFilesData,
+  //     };
 
-        output.on('close', () => {
-          console.log(`✅ ZIP архив создан: ${zipFilePath}, размер: ${archive.pointer()} bytes`);
-          
-          // Настраиваем заголовки для скачивания
-          res.setHeader('Content-Type', 'application/zip');
-          res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
-          res.setHeader('Content-Length', archive.pointer());
+  //     // Создаем временную директорию
+  //     const tempDir = path.join(process.cwd(), "temp_exports");
+  //     if (!fs.existsSync(tempDir)) {
+  //       fs.mkdirSync(tempDir, { recursive: true });
+  //     }
 
-          // Отправляем архив
-          const archiveStream = fs.createReadStream(zipFilePath);
-          archiveStream.pipe(res);
+  //     const timestamp = Date.now();
+  //     const exportFileName = `all_files_export_${timestamp}.json`;
+  //     const jsonFilePath = path.join(tempDir, exportFileName);
+  //     // const zipFileName = `all_files_export_${timestamp}.zip`;
+  //     const zipFileName = "all_files_export.zip";
+  //     const zipFilePath = path.join(tempDir, zipFileName);
 
-          // Очистка после отправки
-          archiveStream.on('end', () => {
-            try {
-              fs.unlinkSync(jsonFilePath);
-              fs.unlinkSync(zipFilePath);
-              console.log(`🧹 Временные файлы удалены`);
-            } catch (cleanupError) {
-              console.error('⚠️ Ошибка при очистке временных файлов:', cleanupError);
-            }
-            resolve();
-          });
+  //     // Сохраняем JSON во временный файл
+  //     console.log(`💾 Сохранение JSON во временный файл: ${jsonFilePath}`);
+  //     fs.writeFileSync(
+  //       jsonFilePath,
+  //       JSON.stringify(exportResult, null, 2),
+  //       "utf8"
+  //     );
 
-          archiveStream.on('error', (error) => {
-            console.error('❌ Ошибка при отправке архива:', error);
-            reject(error);
-          });
-        });
+  //     // Создаем ZIP архив с JSON файлом
+  //     console.log(`📦 Создание ZIP архива: ${zipFilePath}`);
 
-        archive.on('warning', (err) => {
-          if (err.code === 'ENOENT') {
-            console.warn('⚠️ Предупреждение archiver:', err);
-          } else {
-            reject(err);
-          }
-        });
+  //     return new Promise((resolve, reject) => {
+  //       const output = fs.createWriteStream(zipFilePath);
+  //       const archive = archiver("zip", {
+  //         zlib: { level: 9 },
+  //       });
 
-        archive.on('error', (err) => {
-          console.error('❌ Ошибка archiver:', err);
-          reject(err);
-        });
+  //       output.on("close", () => {
+  //         console.log(
+  //           `✅ ZIP архив создан: ${zipFilePath}, размер: ${archive.pointer()} bytes`
+  //         );
 
-        archive.pipe(output);
+  //         // Настраиваем заголовки для скачивания
+  //         res.setHeader("Content-Type", "application/zip");
+  //         res.setHeader(
+  //           "Content-Disposition",
+  //           `attachment; filename="${zipFileName}"`
+  //         );
+  //         res.setHeader("Content-Length", archive.pointer());
 
-        // Добавляем JSON файл в архив
-        archive.file(jsonFilePath, { name: exportFileName });
-        
-        // Завершаем архивацию
-        archive.finalize();
-      });
+  //         // Отправляем архив
+  //         const archiveStream = fs.createReadStream(zipFilePath);
+  //         archiveStream.pipe(res);
 
-    } catch (error) {
-      console.error(`❌ Ошибка при экспорте всех файлов:`, error);
-      
-      // Отправляем JSON ошибки даже при ошибке
-      res.status(500).json({
-        success: false,
-        error: `Ошибка при экспорте всех файлов: ${error.message}`,
-        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-      });
-    }
-  }
-  
-  // В методе getExportableFiles исправьте вызов:
+  //         // Очистка после отправки
+  //         archiveStream.on("end", () => {
+  //           try {
+  //             fs.unlinkSync(jsonFilePath);
+  //             fs.unlinkSync(zipFilePath);
+  //             console.log(`🧹 Временные файлы удалены`);
+  //           } catch (cleanupError) {
+  //             console.error(
+  //               "⚠️ Ошибка при очистке временных файлов:",
+  //               cleanupError
+  //             );
+  //           }
+  //           resolve();
+  //         });
+
+  //         archiveStream.on("error", (error) => {
+  //           console.error("❌ Ошибка при отправке архива:", error);
+  //           reject(error);
+  //         });
+  //       });
+
+  //       archive.on("warning", (err) => {
+  //         if (err.code === "ENOENT") {
+  //           console.warn("⚠️ Предупреждение archiver:", err);
+  //         } else {
+  //           reject(err);
+  //         }
+  //       });
+
+  //       archive.on("error", (err) => {
+  //         console.error("❌ Ошибка archiver:", err);
+  //         reject(err);
+  //       });
+
+  //       archive.pipe(output);
+
+  //       // Добавляем JSON файл в архив
+  //       archive.file(jsonFilePath, { name: exportFileName });
+
+  //       // Завершаем архивацию
+  //       archive.finalize();
+  //     });
+  //   } catch (error) {
+  //     console.error(`❌ Ошибка при экспорте всех файлов как JSON:`, error);
+
+  //     res.status(500).json({
+  //       success: false,
+  //       error: `Ошибка при экспорте всех файлов: ${error.message}`,
+  //       timestamp: new Date().toISOString(),
+  //     });
+  //   }
+  // }
+
   async getExportableFiles(req, res) {
     try {
       const { sessionId } = req.query;
-      
+
       if (!sessionId) {
         return res.status(400).json({ error: "ID сессии не указан" });
       }
 
       // Используем статический метод из FileService
       const files = await FileService.getFilesList(sessionId);
-      
+
       res.status(200).json({
         sessionId,
-        files: files || []
+        files: files || [],
       });
-
     } catch (error) {
       console.error("❌ Ошибка при получении списка файлов:", error);
-      res.status(500).json({ 
+      res.status(500).json({
         error: "Ошибка сервера при получении списка файлов",
-        details: error.message 
+        details: error.message,
       });
     }
   }
@@ -1387,13 +1942,13 @@ static async exportSingleFile(req, res) {
       res.json({
         success: true,
         message: `Нормализовано ${result.normalized} из ${result.total} имен файлов`,
-        ...result
+        ...result,
       });
     } catch (error) {
-      console.error('❌ Ошибка при нормализации имен файлов:', error);
+      console.error("❌ Ошибка при нормализации имен файлов:", error);
       res.status(500).json({
         success: false,
-        error: error.message
+        error: error.message,
       });
     }
   }
@@ -1401,7 +1956,7 @@ static async exportSingleFile(req, res) {
   static async fixFileAssociations(req, res) {
     try {
       const { fileName, ipList } = req.body;
-      
+
       if (!fileName) {
         return res.status(400).json({ error: "Имя файла обязательно" });
       }
@@ -1409,166 +1964,42 @@ static async exportSingleFile(req, res) {
       const result = await FileService.fixFileAssociations(fileName, ipList);
       res.json(result);
     } catch (error) {
-      console.error('❌ Ошибка при исправлении ассоциаций файлов:', error);
+      console.error("❌ Ошибка при исправлении ассоциаций файлов:", error);
       res.status(500).json({ error: error.message });
     }
   }
 
+  static async cleanDatabase(req, res) {
+    try {
+      console.log("🧹 Начало очистки базы данных...");
+
+      // Удаляем в правильном порядке из-за foreign keys
+      await sequelize.query("DELETE FROM host_file_sources");
+      await sequelize.query("DELETE FROM ports");
+      await sequelize.query("DELETE FROM whois");
+      await sequelize.query("DELETE FROM hosts");
+      await sequelize.query("DELETE FROM file_sources");
+
+      // Сбрасываем sequence для PostgreSQL
+      await sequelize.query("SELECT setval('hosts_id_seq', 1, false)");
+      await sequelize.query("SELECT setval('file_sources_id_seq', 1, false)");
+      await sequelize.query(
+        "SELECT setval('host_file_sources_id_seq', 1, false)"
+      );
+      await sequelize.query("SELECT setval('ports_id_seq', 1, false)");
+
+      console.log("✅ База данных очищена");
+
+      res.json({
+        success: true,
+        message: "База данных очищена",
+      });
+    } catch (error) {
+      console.error("❌ Ошибка при очистке базы данных:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message,
+      });
+    }
+  }
 }
-
-// import fs from "fs";
-// import path from "path";
-// import FileService from "../services/files.service.js";
-
-// export default class FileController {
-//   async handleFilesIP(req, res) {
-//     await this.handleFiles(req, res, "txt", FileService.searchIP);
-//   }
-
-//   async handleFilesJSON(req, res) {
-//     await this.handleFiles(req, res, "json", FileService.addedJSONfile);
-//   }
-
-//   // Новый метод для сканирования версий сервисов по IP
-
-//   /****
-//   * 
-//   * POST{
-//   "ip": "100.103.104.59"
-//   }
-//   * 
-//   */
-//   // ОТВЕТ
-//   // {
-//   //   "message": "Сканирование версий для IP 100.103.104.59 завершено",
-//   //   "ip": "100.103.104.59",
-//   //   "data": [
-//   //     {
-//   //       "port": 22,
-//   //       "protocol": "tcp",
-//   //       "state": "open",
-//   //       "serviceInfo": "ssh        OpenSSH 8.9p1 Ubuntu 3ubuntu0.1"
-//   //     },
-//   //     {
-//   //       "port": 80,
-//   //       "protocol": "tcp",
-//   //       "state": "open",
-//   //       "serviceInfo": "http       Apache httpd 2.4.41 ((Ubuntu))"
-//   //     }
-//   //   ]
-//   // }
-
-//   async scanVersionByIP(req, res) {
-//     try {
-//       const { ip } = req.body; // Получаем IP из тела запроса
-
-//       if (!ip) {
-//         return res.status(400).json({ error: "IP адрес не предоставлен" });
-//       }
-
-//       console.log(`Запуск сканирования версий для IP: ${ip}`);
-
-//       // Вызываем функцию из FileService для сканирования версий
-//       const versionScanResult = await FileService.scanVersionDetection(ip);
-
-//       res.status(200).json({
-//         message: `Сканирование версий для IP ${ip} завершено`,
-//         ip: ip,
-//         data: versionScanResult, // Возвращаем результат сканирования
-//       });
-//     } catch (error) {
-//       console.error("Ошибка при сканировании версий:", error);
-//       res.status(500).json({ error: "Ошибка сервера при сканировании версий" });
-//     }
-//   }
-
-//   async handleFiles(req, res, extension, serviceFunction) {
-//     try {
-//       if (!req.files || req.files.length === 0) {
-//         return res.status(400).json({ error: "Файлы не переданы" });
-//       }
-
-//       const processedFiles = await Promise.all(
-//         req.files.map(async (file) => {
-//           const filePath = file.path;
-//           const fileName = file.originalname;
-//           console.log(`Обработка файла: ${fileName} в пути: ${filePath}`);
-
-//           try {
-//             if (path.extname(fileName).toLowerCase() === `.${extension}`) {
-//               const fileContent = await fs.promises.readFile(filePath, "utf-8");
-//               const result = await serviceFunction(fileContent);
-
-//               try {
-//                 await fs.promises.unlink(filePath);
-//                 console.log(`Файл удален: ${filePath}`);
-//               } catch (unlinkError) {
-//                 console.error(
-//                   `Ошибка при удалении файла ${filePath}:`,
-//                   unlinkError
-//                 );
-//               }
-
-//               return {
-//                 fileName,
-//                 message: "IP проверены и добавлены в базу",
-//                 result,
-//               };
-//             } else {
-//               throw new Error(
-//                 `Неподдерживаемый формат файла. Поддерживаются только .${extension}.`
-//               );
-//             }
-//           } catch (readError) {
-//             console.error(`Ошибка при чтении файла ${fileName}:`, readError);
-//             try {
-//               await fs.promises.unlink(filePath);
-//               console.log(`Файл удален после ошибки: ${filePath}`);
-//             } catch (unlinkError) {
-//               console.error(
-//                 `Ошибка при удалении файла ${filePath} после ошибки:`,
-//                 unlinkError
-//               );
-//             }
-//             throw new Error(`Не удалось прочитать файл: ${fileName}`);
-//           }
-//         })
-//       );
-
-//       res
-//         .status(200)
-//         .json({ message: "Файлы успешно загружены", files: processedFiles });
-//     } catch (error) {
-//       console.error("Ошибка при обработке загруженных файлов:", error);
-//       res.status(500).json({ error: "Ошибка сервера" });
-//     }
-//   }
-
-//  async getFileDb(req, res) {
-//     try {
-//       const result = await FileService.getFileDb();
-//       return res.json(result);
-//     } catch (error) {
-//       console.error("Ошибка в getFileDb:", error);
-//       return res.status(500).json({ error: error.message });
-//     }
-//   }
-
-//   async getFileDbRange(req, res) {
-//     try {
-//       const { startDate, endDate } = req.query;
-      
-//       if (!startDate || !endDate) {
-//         return res.status(400).json({ 
-//           error: "Необходимо указать startDate и endDate" 
-//         });
-//       }
-
-//       const result = await FileService.getFileDbRange(startDate, endDate);
-//       return res.json(result);
-//     } catch (error) {
-//       console.error("Ошибка в getFileDbRange:", error);
-//       return res.status(500).json({ error: error.message });
-//     }
-//   }
-// }
