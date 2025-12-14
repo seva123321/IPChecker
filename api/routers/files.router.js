@@ -1,7 +1,6 @@
 import express from "express";
 import multer from "multer";
 import FileController from "../controllers/files.controller.js";
-import FileSource from "../models/FileSource.js";
 
 const router = express.Router();
 const fileController = new FileController();
@@ -16,7 +15,7 @@ router.get("/progress", (req, res) => {
 
 // Маршруты для обработки файлов - экземплярные методы
 router.post(
-  "/upload/ip",
+  "/upload/ip", 
   upload.array("files"),
   fileController.handleFilesIP.bind(fileController)
 );
@@ -28,43 +27,23 @@ router.post(
 );
 
 // Новый маршрут для сканирования json файла
-router.get("/", fileController.getFileDb);
+// router.get("/", fileController.getFileDb);
 
-router.get("/daterange", fileController.getFileDbRange);
+router.get("/daterange", FileController.exportDataByDateRange);
 
 // Экспортные маршруты - статические методы
-router.get('/export/:fileName', FileController.exportSingleFile);
-router.get('/export-all', FileController.exportAllFiles);
-router.get('/export-all/json', FileController.exportAllFilesAsJSON);
+router.get("/export/:fileName", FileController.exportSingleFile);
+router.get("/export-all", FileController.exportAllFiles);
+router.get("/export-all/json", FileController.exportAllFilesAsSingleJSON);
 
-// Этот метод должен быть экземплярным, так как он объявлен без static
-router.get('/exportable-files', (req, res) => fileController.getExportableFiles(req, res));
-
+router.get("/exportable-files", (req, res) =>
+  fileController.getExportableFiles(req, res)
+);
 
 // Добавьте этот маршрут для отладки
-router.get('/normalize-filenames', FileController.normalizeFileNames);
-router.post('/fix-associations', FileController.fixFileAssociations);
-router.get('/debug/files', async (req, res) => {
-  try {
-    const fileSources = await FileSource.findAll({
-      attributes: ['id', 'name', 'uploaded_at'],
-      order: [['uploaded_at', 'DESC']]
-    });
-    
-    res.json({
-      totalFiles: fileSources.length,
-      files: fileSources.map(f => ({
-        id: f.id,
-        name: f.name,
-        uploadedAt: f.uploaded_at,
-        nameEncoded: encodeURIComponent(f.name)
-      }))
-    });
-  } catch (error) {
-    console.error('Ошибка при получении списка файлов:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
+// router.get('/normalize-filenames', FileController.normalizeFileNames);
+// router.post('/fix-associations', FileController.fixFileAssociations);
+router.post("/clean-database", FileController.cleanDatabase); // POST http://localhost:5000/files/clean-database
 
 export default router;
 
@@ -106,8 +85,5 @@ export default router;
 // router.get('/export/:fileName', (req, res) => fileController.exportSingleFile(req, res));
 // router.get('/export-all', (req, res) => fileController.exportAllFiles(req, res));
 // router.get('/exportable-files', (req, res) => fileController.getExportableFiles(req, res));
-
-
-
 
 // export default router;
