@@ -55,30 +55,22 @@ const handleApiError = (error) => {
 }
 
 // Универсальная функция для вызова API с обработкой ошибок
-const callApi = async (method, pathname, params = {}, data = null) => {
-  let url
+const callApi = async (method, pathname, params = {}, data = null, config = {}) => {
+  let url = createUrl(pathname, params)
+  
+  console.log(`${method.toUpperCase()} - URL:`, url.toString(), 'Config:', config)
 
   switch (method.toLowerCase()) {
     case 'get':
-      url = createUrl(pathname, params)
-      console.log(`${method.toUpperCase()} - URL:`, url.toString())
-      return await axios.get(url.toString())
+      return await axios.get(url.toString(), config)
     case 'post':
-      url = createUrl(pathname)
-      console.log(`${method.toUpperCase()} - URL:`, url.toString())
-      return await axios.post(url.toString(), data)
+      return await axios.post(url.toString(), data, config)
     case 'put':
-      url = createUrl(pathname)
-      console.log(`${method.toUpperCase()} - URL:`, url.toString())
-      return await axios.put(url.toString(), data)
+      return await axios.put(url.toString(), data, config)
     case 'patch':
-      url = createUrl(pathname)
-      console.log(`${method.toUpperCase()} - URL:`, url.toString())
-      return await axios.patch(url.toString(), data)
+      return await axios.patch(url.toString(), data, config)
     case 'delete':
-      url = createUrl(pathname, params)
-      console.log(`${method.toUpperCase()} - URL:`, url.toString())
-      return await axios.delete(url.toString())
+      return await axios.delete(url.toString(), config)
     default:
       throw new Error(`Unsupported method: ${method}`)
   }
@@ -86,102 +78,114 @@ const callApi = async (method, pathname, params = {}, data = null) => {
 
 export class ApiService {
   // Универсальный метод для вызова API
-  static async call(method, pathname, params = {}, data = null) {
-    return await callApi(method, pathname, params, data)
+  static async call(method, pathname, params = {}, data = null, config = {}) {
+    return await callApi(method, pathname, params, data, config)
   }
 
-  static async getData(pathname, params) {
+  static async getData(pathname, params, config = {}) {
     try {
-      const response = await callApi('get', pathname, params)
+      const response = await callApi('get', pathname, params, null, config)
       return response.data
     } catch (error) {
       throw handleApiError(error)
     }
   }
 
-  static async postData(pathname, formData) {
+  static async postData(pathname, formData, config = {}) {
     try {
-      const response = await callApi('post', pathname, {}, formData)
+      const response = await callApi('post', pathname, {}, formData, config)
       return response.data
     } catch (error) {
       throw handleApiError(error)
     }
   }
 
-  static async patchData(pathname, formData) {
+  static async patchData(pathname, formData, config = {}) {
     try {
-      const response = await callApi('patch', pathname, {}, formData)
+      const response = await callApi('patch', pathname, {}, formData, config)
       return response.data
     } catch (error) {
       throw handleApiError(error)
     }
   }
 
-  static async searchData(pathname, params) {
+  static async searchData(pathname, params, config = {}) {
     try {
-      const response = await callApi('get', pathname, params)
+      const response = await callApi('get', pathname, params, null, config)
       return response.data
     } catch (error) {
       throw handleApiError(error)
     }
   }
 
-  static async getFileJson(pathname) {
+  static async getFileJson(pathname, config = {}) {
     try {
-      const response = await callApi('get', pathname)
+      const response = await callApi('get', pathname, {}, null, config)
       return response.data
     } catch (error) {
       throw handleApiError(error)
     }
   }
 
-  static async uploadFiles(endpoint, formData) {
+  static async uploadFiles(endpoint, formData, config = {}) {
     try {
-      const response = await callApi('post', endpoint, {}, formData)
+      const response = await callApi('post', endpoint, {}, formData, config)
       return response.data
     } catch (error) {
       throw handleApiError(error)
     }
   }
 
-  //**************** */
-  static async exportAll(pathname) {
+  // Экспортные методы
+  static async exportAll() {
     try {
-      const response = await callApi('get', pathname)
-      return response.data
+      const response = await callApi('get', '/files/export-all/json', {}, null, {
+        responseType: 'blob'
+      });
+      
+      return response;
     } catch (error) {
-      throw handleApiError(error)
+      console.error('Error in exportAll:', error);
+      // Попробуем получить более детальную информацию об ошибке
+      if (error.response && error.response.data) {
+        console.error('Error response data:', error.response.data);
+      }
+      throw handleApiError(error);
     }
   }
 
-  static async exportSession(limit = 100) {
-    try {
-      const response = await callApi('get', '/api/export/session', {
-        limit,
-      })
-      return response.data
-    } catch (error) {
-      throw handleApiError(error)
-    }
-  }
-
-  // Добавлен метод для экспорта по датам
   static async exportByDateRange(startDate, endDate) {
     try {
       const response = await callApi('get', '/files/daterange', {
         startDate,
-        endDate,
-      })
-      return response.data
+        endDate
+      }, null, {
+        responseType: 'blob'
+      });
+      
+      return response;
     } catch (error) {
-      throw handleApiError(error)
+      console.error('Error in exportByDateRange:', error);
+      if (error.response && error.response.data) {
+        console.error('Error response data:', error.response.data);
+      }
+      throw handleApiError(error);
     }
   }
 
-  //**************** */
+  // Старый метод для обратной совместимости
+  static async exportSession(limit = 100) {
+    try {
+      const response = await callApi('get', '/api/export/session', { limit });
+      return response.data;
+    } catch (error) {
+      throw handleApiError(error);
+    }
+  }
 }
 
-export const service = new ApiService()
+export const service = new ApiService();
+
 
 // // ApiService.js
 // import axios from 'axios'
@@ -219,79 +223,184 @@ export const service = new ApiService()
 //   return url
 // }
 
+// // Универсальная функция обработки ошибок
+// const handleApiError = (error) => {
+//   // Обрабатываем ошибки и возвращаем сообщение из ответа сервера
+//   if (error.response && error.response.data) {
+//     // Если сервер вернул JSON с сообщением
+//     if (error.response.data.message) {
+//       return new Error(error.response.data.message)
+//     }
+//     // Если сервер вернул ошибку в другом формате
+//     if (error.response.data.error) {
+//       return new Error(error.response.data.error)
+//     }
+//   }
+//   // Если нет данных от сервера, но есть сообщение об ошибке
+//   if (error.message) {
+//     return new Error(error.message)
+//   }
+//   return new Error('Произошла ошибка при запросе')
+// }
+
+// // Универсальная функция для вызова API с обработкой ошибок
+// const callApi = async (method, pathname, params = {}, data = null) => {
+//   let url
+
+//   switch (method.toLowerCase()) {
+//     case 'get':
+//       url = createUrl(pathname, params)
+//       console.log(`${method.toUpperCase()} - URL:`, url.toString())
+//       return await axios.get(url.toString())
+//     case 'post':
+//       url = createUrl(pathname)
+//       console.log(`${method.toUpperCase()} - URL:`, url.toString())
+//       return await axios.post(url.toString(), data)
+//     case 'put':
+//       url = createUrl(pathname)
+//       console.log(`${method.toUpperCase()} - URL:`, url.toString())
+//       return await axios.put(url.toString(), data)
+//     case 'patch':
+//       url = createUrl(pathname)
+//       console.log(`${method.toUpperCase()} - URL:`, url.toString())
+//       return await axios.patch(url.toString(), data)
+//     case 'delete':
+//       url = createUrl(pathname, params)
+//       console.log(`${method.toUpperCase()} - URL:`, url.toString())
+//       return await axios.delete(url.toString())
+//     default:
+//       throw new Error(`Unsupported method: ${method}`)
+//   }
+// }
+
 // export class ApiService {
 //   // Универсальный метод для вызова API
 //   static async call(method, pathname, params = {}, data = null) {
-//     let url
-
-//     switch (method.toLowerCase()) {
-//       case 'get':
-//         url = createUrl(pathname, params)
-//         console.log(`${method.toUpperCase()} - URL:`, url.toString())
-//         return await axios.get(url.toString())
-//       case 'post':
-//         url = createUrl(pathname)
-//         console.log(`${method.toUpperCase()} - URL:`, url.toString())
-//         return await axios.post(url.toString(), data)
-//       case 'put':
-//         url = createUrl(pathname)
-//         console.log(`${method.toUpperCase()} - URL:`, url.toString())
-//         return await axios.put(url.toString(), data)
-//       case 'delete':
-//         url = createUrl(pathname, params)
-//         console.log(`${method.toUpperCase()} - URL:`, url.toString())
-//         return await axios.delete(url.toString())
-//       default:
-//         throw new Error(`Unsupported method: ${method}`)
-//     }
+//     return await callApi(method, pathname, params, data)
 //   }
 
 //   static async getData(pathname, params) {
-//     const data = await ApiService.call('get', pathname, params)
-//     return data
+//     try {
+//       const response = await callApi('get', pathname, params)
+//       return response.data
+//     } catch (error) {
+//       throw handleApiError(error)
+//     }
 //   }
 
 //   static async postData(pathname, formData) {
-//     const data = await ApiService.call('post', pathname, formData)
-//     return data
+//     try {
+//       const response = await callApi('post', pathname, {}, formData)
+//       return response.data
+//     } catch (error) {
+//       throw handleApiError(error)
+//     }
+//   }
+
+//   static async patchData(pathname, formData) {
+//     try {
+//       const response = await callApi('patch', pathname, {}, formData)
+//       return response.data
+//     } catch (error) {
+//       throw handleApiError(error)
+//     }
 //   }
 
 //   static async searchData(pathname, params) {
-//     const data = await ApiService.call('get', pathname, params)
-//     return data
+//     try {
+//       const response = await callApi('get', pathname, params)
+//       return response.data
+//     } catch (error) {
+//       throw handleApiError(error)
+//     }
 //   }
 
 //   static async getFileJson(pathname) {
-//     const data = await ApiService.call('get', pathname)
-//     return data
+//     try {
+//       const response = await callApi('get', pathname)
+//       return response.data
+//     } catch (error) {
+//       throw handleApiError(error)
+//     }
 //   }
 
 //   static async uploadFiles(endpoint, formData) {
-//     const response = await ApiService.call('post', endpoint, {}, formData)
-//     return response
+//     try {
+//       const response = await callApi('post', endpoint, {}, formData)
+//       return response.data
+//     } catch (error) {
+//       throw handleApiError(error)
+//     }
 //   }
 
 //   //**************** */
-//   static async exportAll(pathname) {
-//     const data = await ApiService.call('get', pathname)
-//     return data
-//   }
+//   // static async exportAll(pathname) {
+//   //   try {
+//   //     const response = await callApi('get', pathname)
+//   //     return response.data
+//   //   } catch (error) {
+//   //     throw handleApiError(error)
+//   //   }
+//   // }
 
 //   static async exportSession(limit = 100) {
-//     const response = await ApiService.call('get', '/api/export/session', {
-//       limit,
-//     })
-//     return response
+//     try {
+//       const response = await callApi('get', '/api/export/session', {
+//         limit,
+//       })
+//       return response.data
+//     } catch (error) {
+//       throw handleApiError(error)
+//     }
 //   }
 
-//   // Добавлен метод для экспорта по датам
-//   static async exportByDateRange(startDate, endDate) {
-//     const response = await ApiService.call('get', '/files/daterange', {
-//       startDate,
-//       endDate,
-//     })
-//     return response
+//   // // Добавлен метод для экспорта по датам
+//   // static async exportByDateRange(startDate, endDate) {
+//   //   try {
+//   //     const response = await callApi('get', '/files/daterange', {
+//   //       startDate,
+//   //       endDate,
+//   //     })
+//   //     return response.data
+//   //   } catch (error) {
+//   //     throw handleApiError(error)
+//   //   }
+//   // }
+//   static async exportAll() {
+//   try {
+//     const response = await axios.get('/files/export-all-db', {
+//       responseType: 'blob', // Важно для скачивания ZIP файла
+//     });
+    
+//     // Возвращаем данные с информацией о типе
+//     return {
+//       data: response.data,
+//       type: 'blob/zip',
+//       headers: response.headers
+//     };
+//   } catch (error) {
+//     console.error('Error in exportAll:', error);
+//     throw handleApiError(error);
 //   }
+// }
+
+// static async exportByDateRange(startDate, endDate) {
+//   try {
+//     const response = await axios.get('/files/daterange', {
+//       params: { startDate, endDate },
+//       responseType: 'blob', // Важно для скачивания ZIP файла
+//     });
+    
+//     return {
+//       data: response.data,
+//       type: 'blob/zip',
+//       headers: response.headers
+//     };
+//   } catch (error) {
+//     console.error('Error in exportByDateRange:', error);
+//     throw handleApiError(error);
+//   }
+// }
 
 //   //**************** */
 // }
