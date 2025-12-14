@@ -1,13 +1,5 @@
-// controllers/common.controller.js
-// GET /data/comment?id=1
-
 import {
   Host,
-  Port,
-  Whois,
-  WhoisKey,
-  WellKnownPort,
-  sequelize,
   Priority,
   PriorityComment,
   Grouping,
@@ -159,13 +151,12 @@ export const patchIpInfo = async (req, res) => {
     // Обновляем приоритет хоста только если он передан
     if (priority_id !== undefined) {
       host.priority_id = priority_id;
-      await host.save();
     }
 
     if (grouping_id !== undefined) {
       host.grouping_id = grouping_id;
-      await host.save();
     }
+    await host.save();
 
     // Создаем или обновляем комментарий только если он передан
     if (comment !== undefined) {
