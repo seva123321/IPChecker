@@ -23,6 +23,7 @@ import {
   PriorityComment,
   HostFileSource,
 } from "../models/index.js";
+import sessionManager from "../utils/sessionManager.js";
 
 // Конфигурация масштабирования
 const SCALING_CONFIG = {
@@ -59,7 +60,8 @@ export default class FileService {
   static async searchIP(
     fileContent,
     fileName = null,
-    progressCallback = () => {}
+    progressCallback = () => {},
+    clientId = null
   ) {
     try {
       const ipRegex =
@@ -126,6 +128,18 @@ export default class FileService {
         ...result,
         fileName: fileName,
       });
+
+       // Если указан clientId, сохраняем файл через SessionManager
+      if (clientId) {
+        const session = sessionManager.createSession(clientId);
+        await FileService.saveProcessedFile(fileName, result, session.id);
+        
+        // Возвращаем sessionId для клиента
+        return {
+          ...result,
+          sessionId: session.id
+        };
+      }
 
       return result;
     } catch (error) {
@@ -638,6 +652,93 @@ export default class FileService {
           })),
       },
     };
+  }
+
+  static async saveProcessedFile(fileName, result, clientId) {
+    try {
+      // Сначала получаем данные в нужном формате из базы данных
+      const fileSource = await FileSource.findOne({
+        where: { name: decodeURIComponent(fileName) },
+        include: [
+          {
+            model: Host,
+            include: [
+              {
+                model: Port,
+                include: [
+                  {
+                    model: WellKnownPort,
+                    attributes: ["name"],
+                  },
+                ],
+              },
+              {
+                model: Whois,
+                include: [
+                  {
+                    model: WhoisKey,
+                    attributes: ["key_name"],
+                  },
+                ],
+              },
+              {
+                model: Priority,
+                attributes: ["id", "name"],
+              },
+              {
+                model: Grouping,
+                attributes: ["id", "name"],
+              },
+              {
+                model: Country,
+                attributes: ["id", "name"],
+              },
+            ],
+          },
+        ],
+      });
+
+      if (!fileSource || !fileSource.Hosts || fileSource.Hosts.length === 0) {
+        console.warn(`⚠️ Не удалось получить данные файла ${fileName} для сохранения`);
+        return null;
+      }
+
+      // Форматируем данные
+      const formattedData = FileService.formattedDataProcess(fileSource);
+
+      // Сохраняем в формате formattedDataProcess С МИНИФИКАЦИЕЙ
+      return await sessionManager.saveFormattedFile(
+        clientId, 
+        fileName, 
+        formattedData,
+        {
+          id: fileSource.id,
+          uploaded_at: fileSource.uploaded_at,
+          updated_at: fileSource.updated_at,
+          encoding: fileSource.encoding
+        },
+        true // Минифицировать
+      );
+    } catch (error) {
+      console.error(`❌ Ошибка сохранения обработанного файла ${fileName}:`, error);
+      
+      // Если не удалось получить форматированные данные, сохраняем сырые (минифицированные)
+      try {
+        return await sessionManager.saveFileToSession(
+          clientId, 
+          fileName, 
+          {
+            rawResult: result,
+            error: "Не удалось получить форматированные данные",
+            timestamp: new Date().toISOString()
+          },
+          true // Минифицировать
+        );
+      } catch (fallbackError) {
+        console.error(`❌ Критическая ошибка сохранения файла:`, fallbackError);
+        throw fallbackError;
+      }
+    }
   }
 
   static formatTime(seconds) {
@@ -2498,110 +2599,72 @@ export default class FileService {
   }
 
   // Альтернативный метод для экспорта одного файла с дополнительной информацией
-  static async exportFileDataWithStats(fileName) {
+  static async exportFileDataWithStats(fileName, minify = true) {
     try {
       const fileData = await this.exportFileData(fileName);
 
-      if (!fileData) {
+      if (!fileData || fileData.length === 0) {
         return null;
       }
 
+      // Форматируем данные
+      const formattedData = fileData; // предполагается, что exportFileData уже возвращает formattedDataProcess
+
       // Собираем статистику
       const stats = {
-        total_hosts: fileData.length,
-        reachable_hosts: fileData.filter((h) => h.reachable).length,
-        unreachable_hosts: fileData.filter((h) => !h.reachable).length,
-        hosts_with_whois: fileData.filter((h) => h.has_whois).length,
-        hosts_with_priority: fileData.filter(
+        total_hosts: formattedData.length,
+        reachable_hosts: formattedData.filter((h) => h.reachable).length,
+        unreachable_hosts: formattedData.filter((h) => !h.reachable).length,
+        hosts_with_whois: formattedData.filter((h) => h.has_whois).length,
+        hosts_with_priority: formattedData.filter(
           (h) => h.priority_info && h.priority_info.priority
         ).length,
-        hosts_with_grouping: fileData.filter(
+        hosts_with_grouping: formattedData.filter(
           (h) => h.priority_info && h.priority_info.grouping
         ).length,
-        hosts_with_comments: fileData.filter((h) => h.comment).length,
-        open_ports_count: fileData.reduce(
-          (sum, host) => sum + host.port_data.open.length,
+        hosts_with_comments: formattedData.filter((h) => h.comment).length,
+        open_ports_count: formattedData.reduce(
+          (sum, host) => sum + (host.port_data?.open?.length || 0),
           0
         ),
-        filtered_ports_count: fileData.reduce(
-          (sum, host) => sum + host.port_data.filtered.length,
+        filtered_ports_count: formattedData.reduce(
+          (sum, host) => sum + (host.port_data?.filtered?.length || 0),
           0
         ),
         unique_ports: [
           ...new Set(
-            fileData.flatMap((host) =>
-              [...host.port_data.open, ...host.port_data.filtered].map(
-                (p) => p.port
-              )
+            formattedData.flatMap((host) =>
+              [
+                ...(host.port_data?.open || []),
+                ...(host.port_data?.filtered || []),
+              ].map((p) => p.port)
             )
           ),
         ].length,
       };
 
-      // Группировка по приоритетам
-      const priorityStats = {};
-      fileData.forEach((host) => {
-        const priorityName =
-          host.priority_info && host.priority_info.priority
-            ? host.priority_info.priority.name
-            : "Не указан";
-
-        if (!priorityStats[priorityName]) {
-          priorityStats[priorityName] = {
-            count: 0,
-            reachable: 0,
-            unreachable: 0,
-          };
-        }
-
-        priorityStats[priorityName].count++;
-        if (host.reachable) {
-          priorityStats[priorityName].reachable++;
-        } else {
-          priorityStats[priorityName].unreachable++;
-        }
-      });
-
-      // Группировка по группировкам
-      const groupingStats = {};
-      fileData.forEach((host) => {
-        const groupingName =
-          host.priority_info && host.priority_info.grouping
-            ? host.priority_info.grouping.name
-            : "Не указана";
-
-        if (!groupingStats[groupingName]) {
-          groupingStats[groupingName] = {
-            count: 0,
-            reachable: 0,
-            unreachable: 0,
-          };
-        }
-
-        groupingStats[groupingName].count++;
-        if (host.reachable) {
-          groupingStats[groupingName].reachable++;
-        } else {
-          groupingStats[groupingName].unreachable++;
-        }
-      });
-
-      return {
-        file_info: {
-          name: fileName,
-          exported_at: new Date()
-            .toISOString()
-            .replace("T", " ")
-            .substring(0, 19),
-          total_hosts: stats.total_hosts,
+      const result = {
+        success: true,
+        meta: {
+          export_info: {
+            exported_at: new Date().toISOString(),
+            format_version: "1.0",
+            minified: minify,
+          },
+          file_info: {
+            name: fileName,
+            exported_at: new Date().toISOString(),
+            total_hosts: stats.total_hosts,
+          },
+          statistics: {
+            general: stats,
+          },
         },
-        statistics: {
-          general: stats,
-          by_priority: priorityStats,
-          by_grouping: groupingStats,
-        },
-        hosts: fileData,
+        data: formattedData,
       };
+
+      // Возвращаем в нужном формате (минифицированном или нет)
+      return minify ? JSON.stringify(result) : JSON.stringify(result, null, 2);
     } catch (error) {
       console.error(
         `❌ Ошибка при экспорте данных файла "${fileName}" со статистикой:`,

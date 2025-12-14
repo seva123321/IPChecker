@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import archiver from "archiver"; // Добавлен импорт
 import FileService from "../services/files.service.js";
+import sessionManager from '../utils/sessionManager.js';
 import { Op } from "sequelize";
 import {
   Host,
@@ -112,8 +113,57 @@ export default class FileController {
     }
   }
 
+  // async handleFilesIP(req, res) {
+  //   await this.handleFilesWithProgress(req, res, "txt", FileService.searchIP);
+  // }
   async handleFilesIP(req, res) {
-    await this.handleFilesWithProgress(req, res, "txt", FileService.searchIP);
+    try {
+      // Получаем clientId из запроса
+      const clientId = req.query.clientId || req.body.clientId;
+      
+      if (!clientId) {
+        return res.status(400).json({
+          success: false,
+          error: "clientId не указан"
+        });
+      }
+      
+      console.log(`🔄 Обработка файлов для сессии: ${clientId}`);
+      
+      await this.handleFilesWithProgress(
+        req, 
+        res, 
+        "txt", 
+        async (content, fileName, progressCallback) => {
+          return await FileService.searchIP(
+            content, 
+            fileName, 
+            progressCallback, 
+            clientId  // Передаем clientId
+          );
+        }
+      );
+    } catch (error) {
+      console.error("❌ Ошибка в handleFilesIP:", error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  static async cleanupSession(sessionId) {
+    try {
+      const sessionDir = path.join(process.cwd(), "temp_exports", sessionId);
+      
+      if (fs.existsSync(sessionDir)) {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+        console.log(`🧹 Сессия ${sessionId} удалена`);
+        return { success: true, message: `Сессия ${sessionId} удалена` };
+      }
+      
+      return { success: false, message: `Сессия ${sessionId} не найдена` };
+    } catch (error) {
+      console.error(`❌ Ошибка при удалении сессии ${sessionId}:`, error);
+      throw error;
+    }
   }
 
   async handleFilesJSON(req, res) {
@@ -382,7 +432,6 @@ export default class FileController {
     }
   }
 
-  // controllers/FileController.js - исправьте экспортные методы
   static async exportSingleFile(req, res) {
     try {
       const { fileName } = req.params;
@@ -1204,19 +1253,274 @@ export default class FileController {
     return score;
   }
 
-  static async exportAllFiles(req, res) {
+  // В файле files.controller.js
+static async exportAllFiles(req, res) {
+  try {
+    const { sessionId } = req.query;
+    
+    if (!sessionId) {
+      return res.status(400).json({
+        success: false,
+        error: "Не указан sessionId",
+      });
+    }
+
+    console.log(`📤 Начало экспорта всех файлов для сессии: ${sessionId}`);
+
+    // Используем SessionManager для проверки и получения файлов
+    if (!sessionManager.sessionExists(sessionId)) {
+      return res.status(404).json({
+        success: false,
+        error: "Сессия не найдена или файлы уже удалены",
+      });
+    }
+
+    const sessionFiles = sessionManager.getAllSessionFiles(sessionId);
+    
+    if (!sessionFiles.success || sessionFiles.fileCount === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "В сессии нет файлов для экспорта",
+      });
+    }
+
+    // Создаем временную директорию
+    const tempDir = path.join(process.cwd(), "temp_exports");
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const timestamp = Date.now();
+    const exportDir = path.join(tempDir, `export_session_${sessionId}_${timestamp}`);
+    fs.mkdirSync(exportDir, { recursive: true });
+
+    console.log(`📁 Создана временная директория: ${exportDir}`);
+
+    // Массив для хранения информации об экспортированных файлах
+    const exportSummary = [];
+
+    // Сохраняем каждый файл в экспортную директорию
+    sessionFiles.files.forEach((file, index) => {
+      try {
+        const exportFileName = file.name;
+        const exportFilePath = path.join(exportDir, exportFileName);
+
+        // Если файл уже минифицирован, просто копируем
+        // Если нет - читаем и пересохраняем минифицированным
+        let fileContent;
+        try {
+          fileContent = fs.readFileSync(file.path, 'utf8');
+          const parsed = JSON.parse(fileContent);
+          
+          // Минифицируем заново (на случай если файл был не минифицирован)
+          const minified = JSON.stringify(parsed);
+          fs.writeFileSync(exportFilePath, minified, "utf8");
+          
+        } catch (parseError) {
+          // Если не удалось распарсить, просто копируем
+          fs.copyFileSync(file.path, exportFilePath);
+        }
+
+        const fileStats = fs.statSync(exportFilePath);
+
+        // Добавляем в summary
+        exportSummary.push({
+          file_name: file.name,
+          export_file_name: exportFileName,
+          hosts_count: file.data ? file.data.length : 0,
+          reachable_hosts: file.data ? file.data.filter((h) => h.reachable).length : 0,
+          unreachable_hosts: file.data ? file.data.filter((h) => !h.reachable).length : 0,
+          last_updated: file.stats.mtime,
+          statistics: file.meta.statistics || {},
+          file_size: fileStats.size,
+        });
+
+        console.log(`✅ Файл сохранен (минифицирован): ${exportFileName}, размер: ${fileStats.size} bytes`);
+      } catch (fileError) {
+        console.error(`❌ Ошибка при сохранении файла ${file.name}:`, fileError.message);
+        exportSummary.push({
+          file_name: file.name,
+          export_file_name: null,
+          error: fileError.message,
+          hosts_count: 0,
+          reachable_hosts: 0,
+          unreachable_hosts: 0,
+          file_size: 0,
+        });
+      }
+    });
+
+    if (exportSummary.length === 0) {
+      // Очистка временной директории
+      fs.rmSync(exportDir, { recursive: true, force: true });
+
+      return res.status(404).json({
+        success: false,
+        error: "Не удалось экспортировать ни одного файла",
+      });
+    }
+
+    // Создаем summary файл с общей статистикой
+    const successfulExports = exportSummary.filter((f) => !f.error);
+
+    const summaryData = {
+      success: true,
+      meta: {
+        export_info: {
+          exported_at: new Date().toISOString(),
+          export_archive_name: `export_session_${sessionId}_${timestamp}.zip`,
+          format_version: "1.0",
+          total_files_processed: exportSummary.length,
+          successfully_exported: successfulExports.length,
+          failed_exports: exportSummary.filter((f) => f.error).length,
+          total_size_bytes: successfulExports.reduce((sum, file) => sum + file.file_size, 0),
+          session_id: sessionId,
+        },
+        statistics: {
+          total_files: successfulExports.length,
+          total_hosts: successfulExports.reduce(
+            (sum, file) => sum + file.hosts_count,
+            0
+          ),
+          total_reachable_hosts: successfulExports.reduce(
+            (sum, file) => sum + file.reachable_hosts,
+            0
+          ),
+          total_unreachable_hosts: successfulExports.reduce(
+            (sum, file) => sum + file.unreachable_hosts,
+            0
+          ),
+          total_with_whois: successfulExports.reduce(
+            (sum, file) => sum + (file.statistics?.with_whois || 0),
+            0
+          ),
+          total_with_ports: successfulExports.reduce(
+            (sum, file) => sum + (file.statistics?.with_ports || 0),
+            0
+          ),
+        },
+      },
+      files: exportSummary.map((file) => ({
+        original_name: file.file_name,
+        export_file_name: file.export_file_name,
+        success: !file.error,
+        error: file.error,
+        hosts_count: file.hosts_count,
+        reachable_hosts: file.reachable_hosts,
+        unreachable_hosts: file.unreachable_hosts,
+        last_updated: file.last_updated,
+        statistics: file.statistics,
+        file_size: file.file_size,
+      })),
+    };
+
+    const summaryPath = path.join(
+      exportDir,
+      `export_summary_${sessionId}_${timestamp}.json`
+    );
+    
+    // Summary файл минифицируем
+    const minifiedSummary = JSON.stringify(summaryData);
+    fs.writeFileSync(summaryPath, minifiedSummary, "utf8");
+
+    // Создаем ZIP архив
+    const archiveFileName = `export_session_${sessionId}_${timestamp}.zip`;
+    const archivePath = path.join(tempDir, archiveFileName);
+
+    return new Promise((resolve, reject) => {
+      const output = fs.createWriteStream(archivePath);
+      const archive = archiver("zip", {
+        zlib: { level: 9 },
+      });
+
+      output.on("close", () => {
+        console.log(
+          `✅ ZIP архив создан: ${archivePath}, размер: ${archive.pointer()} bytes`
+        );
+
+        // Настраиваем заголовки для скачивания
+        res.setHeader("Content-Type", "application/zip");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${archiveFileName}"`
+        );
+        res.setHeader("Content-Length", archive.pointer());
+
+        // Отправляем архив
+        const archiveStream = fs.createReadStream(archivePath);
+        archiveStream.pipe(res);
+
+        // Очистка после отправки
+        archiveStream.on("end", () => {
+          try {
+            // Удаляем временные файлы
+            fs.rmSync(exportDir, { recursive: true, force: true });
+            fs.unlinkSync(archivePath);
+            
+            // Удаляем оригинальную сессию после успешного экспорта
+            sessionManager.cleanupSession(sessionId);
+            
+            console.log(`🧹 Временные файлы и сессия ${sessionId} удалены`);
+          } catch (cleanupError) {
+            console.error(
+              "⚠️ Ошибка при очистке временных файлов:",
+              cleanupError
+            );
+          }
+          resolve();
+        });
+
+        archiveStream.on("error", (error) => {
+          console.error("❌ Ошибка при отправке архива:", error);
+          reject(error);
+        });
+      });
+
+      archive.on("warning", (err) => {
+        if (err.code === "ENOENT") {
+          console.warn("⚠️ Предупреждение archiver:", err);
+        } else {
+          reject(err);
+        }
+      });
+
+      archive.on("error", (err) => {
+        console.error("❌ Ошибка archiver:", err);
+        reject(err);
+      });
+
+      archive.pipe(output);
+
+      // Добавляем все файлы из exportDir в архив
+      archive.directory(exportDir, false);
+
+      // Завершаем архивацию
+      archive.finalize();
+    });
+  } catch (error) {
+    console.error(`❌ Ошибка при экспорте всех файлов сессии:`, error);
+
+    res.status(500).json({
+      success: false,
+      error: `Ошибка при экспорте всех файлов: ${error.message}`,
+      timestamp: new Date().toISOString(),
+    });
+  }
+}
+
+  static async exportAllFilesFromDB(req, res) {
     try {
-      console.log(`📤 Начало экспорта всех файлов в архив`);
+      console.log(`📤 Начало экспорта всех файлов из базы данных в архив`);
 
       // Получаем все файлы с хостами, отсортированные по дате
       const allFilesWithHosts = await FileSource.findAll({
         attributes: ["id", "name", "uploaded_at", "encoding", "updated_at"],
-        order: [["updated_at", "DESC"]], // Сортируем по дате обновления
+        order: [["updated_at", "DESC"]],
         include: [
           {
             model: Host,
             attributes: ["id"],
-            required: true, // Только файлы с хостами
+            required: true,
           },
         ],
       });
@@ -1237,7 +1541,7 @@ export default class FileController {
       }
 
       const timestamp = Date.now();
-      const exportDir = path.join(tempDir, `export_all_${timestamp}`);
+      const exportDir = path.join(tempDir, `export_all_db_${timestamp}`);
       fs.mkdirSync(exportDir, { recursive: true });
 
       console.log(`📁 Создана временная директория: ${exportDir}`);
@@ -1355,12 +1659,11 @@ export default class FileController {
             data: formattedData,
           };
 
-          // Сохраняем JSON файл
-          fs.writeFileSync(
-            exportFilePath,
-            JSON.stringify(exportResult, null, 2),
-            "utf8"
-          );
+          // Сохраняем JSON файл в МИНИФИЦИРОВАННОМ виде (как при скачивании по одному)
+          const minifiedJSON = JSON.stringify(exportResult);
+          fs.writeFileSync(exportFilePath, minifiedJSON, "utf8");
+
+          const fileStats = fs.statSync(exportFilePath);
 
           // Добавляем информацию в summary
           exportSummary.push({
@@ -1372,17 +1675,18 @@ export default class FileController {
             unreachable_hosts: formattedData.filter((h) => !h.reachable).length,
             last_updated: fullFileData.updated_at,
             statistics: hostStats,
+            file_size: fileStats.size,
+            minified: true,
           });
 
           console.log(
-            `✅ Файл экспортирован: ${exportFileName}, хостов: ${formattedData.length}`
+            `✅ Файл экспортирован (минифицирован): ${exportFileName}, хостов: ${formattedData.length}, размер: ${fileStats.size} bytes`
           );
         } catch (fileError) {
           console.error(
             `❌ Ошибка при экспорте файла "${fileSource.name}":`,
             fileError.message
           );
-          // Добавляем файл с ошибкой в summary
           exportSummary.push({
             file_id: fileSource.id,
             file_name: fileSource.name,
@@ -1391,6 +1695,8 @@ export default class FileController {
             hosts_count: 0,
             reachable_hosts: 0,
             unreachable_hosts: 0,
+            file_size: 0,
+            minified: false,
           });
         }
       }
@@ -1413,11 +1719,13 @@ export default class FileController {
         meta: {
           export_info: {
             exported_at: new Date().toISOString(),
-            export_archive_name: `all_files_export_${timestamp}.zip`,
+            export_archive_name: `all_files_export_db_${timestamp}.zip`,
             format_version: "1.0",
             total_files_processed: exportSummary.length,
             successfully_exported: successfulExports.length,
             failed_exports: exportSummary.filter((f) => f.error).length,
+            total_size_bytes: successfulExports.reduce((sum, file) => sum + file.file_size, 0),
+            minified_files: successfulExports.filter(f => f.minified).length,
           },
           statistics: {
             total_files: successfulExports.length,
@@ -1454,21 +1762,22 @@ export default class FileController {
           unreachable_hosts: file.unreachable_hosts,
           last_updated: file.last_updated,
           statistics: file.statistics,
+          file_size: file.file_size,
+          minified: file.minified,
         })),
       };
 
       const summaryPath = path.join(
         exportDir,
-        `export_summary_${timestamp}.json`
+        `export_summary_db_${timestamp}.json`
       );
-      fs.writeFileSync(
-        summaryPath,
-        JSON.stringify(summaryData, null, 2),
-        "utf8"
-      );
+      
+      // Summary файл тоже минифицируем
+      const minifiedSummary = JSON.stringify(summaryData);
+      fs.writeFileSync(summaryPath, minifiedSummary, "utf8");
 
       // Создаем ZIP архив
-      const archiveFileName = `all_files_export_${timestamp}.zip`;
+      const archiveFileName = `all_files_export_db_${timestamp}.zip`;
       const archivePath = path.join(tempDir, archiveFileName);
 
       return new Promise((resolve, reject) => {
@@ -1496,7 +1805,6 @@ export default class FileController {
 
           // Очистка после отправки
           archiveStream.on("end", () => {
-            // Удаляем временные файлы
             try {
               fs.rmSync(exportDir, { recursive: true, force: true });
               fs.unlinkSync(archivePath);
@@ -1538,7 +1846,7 @@ export default class FileController {
         archive.finalize();
       });
     } catch (error) {
-      console.error(`❌ Ошибка при экспорте всех файлов:`, error);
+      console.error(`❌ Ошибка при экспорте всех файлов из БД:`, error);
 
       res.status(500).json({
         success: false,
@@ -1547,370 +1855,6 @@ export default class FileController {
       });
     }
   }
-
-  // // Альтернативный метод для получения всех файлов как JSON (без архивации)
-  // static async exportAllFilesAsSingleJSON(req, res) {
-  //   try {
-  //     console.log(`📤 Начало экспорта всех файлов как единый JSON`);
-
-  //     // Получаем все файлы с хостами
-  //     const allFilesWithHosts = await FileSource.findAll({
-  //       attributes: ["id", "name", "uploaded_at", "encoding", "updated_at"],
-  //       order: [["uploaded_at", "DESC"]],
-  //       include: [
-  //         {
-  //           model: Host,
-  //           attributes: ["id"],
-  //           required: true,
-  //         },
-  //       ],
-  //     });
-
-  //     console.log(`📋 Всего файлов с хостами: ${allFilesWithHosts.length}`);
-
-  //     if (allFilesWithHosts.length === 0) {
-  //       return res.status(404).json({
-  //         success: false,
-  //         error: "В базе данных нет ни одного файла с хостами",
-  //       });
-  //     }
-
-  //     // Массив для хранения всех экспортированных файлов
-  //     const allFilesData = [];
-
-  //     // Обрабатываем каждый файл
-  //     for (let i = 0; i < allFilesWithHosts.length; i++) {
-  //       const fileSource = allFilesWithHosts[i];
-
-  //       console.log(
-  //         `📄 Обработка файла ${i + 1}/${allFilesWithHosts.length}: "${
-  //           fileSource.name
-  //         }"`
-  //       );
-
-  //       try {
-  //         // Получаем полные данные файла
-  //         const fullFileData = await FileSource.findOne({
-  //           where: { id: fileSource.id },
-  //           include: [
-  //             {
-  //               model: Host,
-  //               include: [
-  //                 {
-  //                   model: Port,
-  //                   include: [
-  //                     {
-  //                       model: WellKnownPort,
-  //                       attributes: ["name"],
-  //                     },
-  //                   ],
-  //                 },
-  //                 {
-  //                   model: Whois,
-  //                   include: [
-  //                     {
-  //                       model: WhoisKey,
-  //                       attributes: ["key_name"],
-  //                     },
-  //                   ],
-  //                 },
-  //                 {
-  //                   model: Priority,
-  //                   attributes: ["id", "name"],
-  //                 },
-  //                 {
-  //                   model: Grouping,
-  //                   attributes: ["id", "name"],
-  //                 },
-  //                 {
-  //                   model: Country,
-  //                   attributes: ["id", "name"],
-  //                 },
-  //               ],
-  //             },
-  //           ],
-  //         });
-
-  //         if (!fullFileData.Hosts || fullFileData.Hosts.length === 0) {
-  //           continue;
-  //         }
-
-  //         // Форматируем данные (такая же структура как в exportSingleFile)
-  //         const formattedData = fullFileData.Hosts.map((host) => {
-  //           // Формируем данные портов
-  //           const portData = {
-  //             open: [],
-  //             filtered: [],
-  //             all: [],
-  //           };
-
-  //           if (host.Ports && host.Ports.length > 0) {
-  //             host.Ports.forEach((port) => {
-  //               const portInfo = {
-  //                 port: port.port,
-  //                 state: port.type || "unknown",
-  //                 service: port.WellKnownPort ? port.WellKnownPort.name : null,
-  //                 protocol: port.protocol || "tcp",
-  //                 created_at: port.created_at,
-  //                 updated_at: port.updated_at,
-  //               };
-
-  //               if (port.type === "open") {
-  //                 portData.open.push(portInfo);
-  //               } else if (port.type === "filtered") {
-  //                 portData.filtered.push(portInfo);
-  //               }
-  //               portData.all.push(portInfo);
-  //             });
-  //           }
-
-  //           // Формируем данные WHOIS
-  //           const whoisData = [];
-  //           if (host.Whois && host.Whois.length > 0) {
-  //             host.Whois.forEach((whois) => {
-  //               if (whois.WhoisKey && whois.WhoisKey.key_name) {
-  //                 whoisData.push({
-  //                   key: whois.WhoisKey.key_name,
-  //                   value: whois.value,
-  //                   created_at: whois.created_at,
-  //                 });
-  //               }
-  //             });
-  //           }
-
-  //           // Базовый объект хоста
-  //           const hostData = {
-  //             id: host.id,
-  //             ip: host.ip,
-  //             reachable: host.reachable !== undefined ? host.reachable : false,
-  //             last_checked: host.updated_at,
-  //             created_at: host.created_at,
-  //             ports: portData,
-  //             priority_info: {
-  //               priority: host.Priority
-  //                 ? {
-  //                     id: host.Priority.id,
-  //                     name: host.Priority.name,
-  //                     created_at: host.Priority.created_at,
-  //                   }
-  //                 : null,
-  //               grouping: host.Grouping
-  //                 ? {
-  //                     id: host.Grouping.id,
-  //                     name: host.Grouping.name,
-  //                     created_at: host.Grouping.created_at,
-  //                   }
-  //                 : null,
-  //               country: host.Country
-  //                 ? {
-  //                     id: host.Country.id,
-  //                     name: host.Country.name,
-  //                     code: host.Country.code || null,
-  //                     created_at: host.Country.created_at,
-  //                   }
-  //                 : null,
-  //             },
-  //             has_whois: whoisData.length > 0,
-  //             whois_count: whoisData.length,
-  //             port_count: {
-  //               total: portData.all.length,
-  //               open: portData.open.length,
-  //               filtered: portData.filtered.length,
-  //             },
-  //           };
-
-  //           // Добавляем WHOIS данные, если они есть
-  //           if (whoisData.length > 0) {
-  //             const whoisObject = {};
-  //             whoisData.forEach((item) => {
-  //               whoisObject[item.key] = item.value;
-  //             });
-  //             hostData.whois = whoisObject;
-  //             hostData.whois_details = whoisData;
-  //           }
-
-  //           return hostData;
-  //         });
-
-  //         // Статистика для файла
-  //         const hostStats = {
-  //           total: formattedData.length,
-  //           reachable: formattedData.filter((h) => h.reachable).length,
-  //           unreachable: formattedData.filter((h) => !h.reachable).length,
-  //           with_whois: formattedData.filter((h) => h.has_whois).length,
-  //           with_ports: formattedData.filter((h) => h.port_count.total > 0)
-  //             .length,
-  //           with_open_ports: formattedData.filter((h) => h.port_count.open > 0)
-  //             .length,
-  //         };
-
-  //         // Добавляем файл в общий массив
-  //         allFilesData.push({
-  //           file_info: {
-  //             file_id: fullFileData.id,
-  //             file_name: fullFileData.name,
-  //             uploaded_at: fullFileData.uploaded_at,
-  //             encoding: fullFileData.encoding,
-  //             updated_at: fullFileData.updated_at || "UTF-8",
-  //           },
-  //           statistics: hostStats,
-  //           data: formattedData,
-  //         });
-
-  //         console.log(
-  //           `✅ Файл обработан: "${fileSource.name}", хостов: ${formattedData.length}`
-  //         );
-  //       } catch (fileError) {
-  //         console.error(
-  //           `❌ Ошибка при обработке файла "${fileSource.name}":`,
-  //           fileError
-  //         );
-  //         // Добавляем файл с ошибкой
-  //         allFilesData.push({
-  //           file_info: {
-  //             file_id: fileSource.id,
-  //             file_name: fileSource.name,
-  //             uploaded_at: fileSource.uploaded_at,
-  //           },
-  //           error: fileError.message,
-  //           data: [],
-  //         });
-  //       }
-  //     }
-
-  //     // Общая статистика
-  //     const successfulFiles = allFilesData.filter((f) => !f.error);
-  //     const totalStats = {
-  //       total_files: allFilesData.length,
-  //       successful_files: successfulFiles.length,
-  //       failed_files: allFilesData.filter((f) => f.error).length,
-  //       total_hosts: successfulFiles.reduce(
-  //         (sum, file) => sum + (file.statistics?.total || 0),
-  //         0
-  //       ),
-  //       total_reachable_hosts: successfulFiles.reduce(
-  //         (sum, file) => sum + (file.statistics?.reachable || 0),
-  //         0
-  //       ),
-  //       total_unreachable_hosts: successfulFiles.reduce(
-  //         (sum, file) => sum + (file.statistics?.unreachable || 0),
-  //         0
-  //       ),
-  //     };
-
-  //     // Формируем финальный JSON
-  //     const exportResult = {
-  //       success: true,
-  //       meta: {
-  //         export_info: {
-  //           exported_at: new Date().toISOString(),
-  //           export_format: "single_json",
-  //           format_version: "1.0",
-  //         },
-  //         statistics: totalStats,
-  //       },
-  //       files: allFilesData,
-  //     };
-
-  //     // Создаем временную директорию
-  //     const tempDir = path.join(process.cwd(), "temp_exports");
-  //     if (!fs.existsSync(tempDir)) {
-  //       fs.mkdirSync(tempDir, { recursive: true });
-  //     }
-
-  //     const timestamp = Date.now();
-  //     const exportFileName = `all_files_export_${timestamp}.json`;
-  //     const jsonFilePath = path.join(tempDir, exportFileName);
-  //     // const zipFileName = `all_files_export_${timestamp}.zip`;
-  //     const zipFileName = "all_files_export.zip";
-  //     const zipFilePath = path.join(tempDir, zipFileName);
-
-  //     // Сохраняем JSON во временный файл
-  //     console.log(`💾 Сохранение JSON во временный файл: ${jsonFilePath}`);
-  //     fs.writeFileSync(
-  //       jsonFilePath,
-  //       JSON.stringify(exportResult, null, 2),
-  //       "utf8"
-  //     );
-
-  //     // Создаем ZIP архив с JSON файлом
-  //     console.log(`📦 Создание ZIP архива: ${zipFilePath}`);
-
-  //     return new Promise((resolve, reject) => {
-  //       const output = fs.createWriteStream(zipFilePath);
-  //       const archive = archiver("zip", {
-  //         zlib: { level: 9 },
-  //       });
-
-  //       output.on("close", () => {
-  //         console.log(
-  //           `✅ ZIP архив создан: ${zipFilePath}, размер: ${archive.pointer()} bytes`
-  //         );
-
-  //         // Настраиваем заголовки для скачивания
-  //         res.setHeader("Content-Type", "application/zip");
-  //         res.setHeader(
-  //           "Content-Disposition",
-  //           `attachment; filename="${zipFileName}"`
-  //         );
-  //         res.setHeader("Content-Length", archive.pointer());
-
-  //         // Отправляем архив
-  //         const archiveStream = fs.createReadStream(zipFilePath);
-  //         archiveStream.pipe(res);
-
-  //         // Очистка после отправки
-  //         archiveStream.on("end", () => {
-  //           try {
-  //             fs.unlinkSync(jsonFilePath);
-  //             fs.unlinkSync(zipFilePath);
-  //             console.log(`🧹 Временные файлы удалены`);
-  //           } catch (cleanupError) {
-  //             console.error(
-  //               "⚠️ Ошибка при очистке временных файлов:",
-  //               cleanupError
-  //             );
-  //           }
-  //           resolve();
-  //         });
-
-  //         archiveStream.on("error", (error) => {
-  //           console.error("❌ Ошибка при отправке архива:", error);
-  //           reject(error);
-  //         });
-  //       });
-
-  //       archive.on("warning", (err) => {
-  //         if (err.code === "ENOENT") {
-  //           console.warn("⚠️ Предупреждение archiver:", err);
-  //         } else {
-  //           reject(err);
-  //         }
-  //       });
-
-  //       archive.on("error", (err) => {
-  //         console.error("❌ Ошибка archiver:", err);
-  //         reject(err);
-  //       });
-
-  //       archive.pipe(output);
-
-  //       // Добавляем JSON файл в архив
-  //       archive.file(jsonFilePath, { name: exportFileName });
-
-  //       // Завершаем архивацию
-  //       archive.finalize();
-  //     });
-  //   } catch (error) {
-  //     console.error(`❌ Ошибка при экспорте всех файлов как JSON:`, error);
-
-  //     res.status(500).json({
-  //       success: false,
-  //       error: `Ошибка при экспорте всех файлов: ${error.message}`,
-  //       timestamp: new Date().toISOString(),
-  //     });
-  //   }
-  // }
 
   async getExportableFiles(req, res) {
     try {

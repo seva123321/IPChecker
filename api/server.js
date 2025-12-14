@@ -9,6 +9,8 @@ import IpRouter from "./routers/ip.router.js";
 import PortsRouter from "./routers/ports.router.js";
 import WordsRouter from "./routers/words.router.js";
 import multer from "multer";
+import sessionManager from './utils/sessionManager.js';
+
 const upload = multer({ dest: "uploads/" }); // временная папка
 
 dotenv.config();
@@ -36,3 +38,12 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`Сервер успешно запущен на порту ${PORT}`);
 });
+
+
+// Очищаем старые сессии при старте
+sessionManager.cleanupOldSessions(24); // Удалить сессии старше 24 часов
+
+// Запускаем периодическую очистку
+setInterval(() => {
+  sessionManager.cleanupOldSessions(24);
+}, 60 * 60 * 1000); // Каждый час
