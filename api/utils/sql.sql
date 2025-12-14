@@ -221,3 +221,14 @@ BEGIN
     END IF;
 END;
 $$ LANGUAGE plpgsql;
+
+-- Добавить поля created_at и updated_at в таблицу file_sources
+ALTER TABLE file_sources 
+ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+-- Обновить существующие записи
+UPDATE file_sources 
+SET created_at = uploaded_at, 
+    updated_at = uploaded_at 
+WHERE created_at IS NULL;

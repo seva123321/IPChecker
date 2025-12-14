@@ -8,6 +8,7 @@ import PriorityComment from './PriorityComment.js';
 import Grouping from './Grouping.js';
 import Country from './Country.js';
 import FileSource from './FileSource.js';
+import HostFileSource from './HostFileSource.js'; // ДОБАВЬТЕ
 import sequelize from '../db.js';
 
 // Связи
@@ -34,12 +35,30 @@ Priority.hasMany(PriorityComment, { foreignKey: 'priority_id' });
 Host.belongsTo(Grouping, { foreignKey: 'grouping_id' });
 Grouping.hasMany(Host, { foreignKey: 'grouping_id' });
 
-// Новые связи для стран и файлов
+// Новые связи для стран
 Host.belongsTo(Country, { foreignKey: 'country_id' });
 Country.hasMany(Host, { foreignKey: 'country_id' });
 
-Host.belongsTo(FileSource, { foreignKey: 'file_source_id' });
-FileSource.hasMany(Host, { foreignKey: 'file_source_id' });
+// Связь многие-ко-многим между Host и FileSource
+Host.belongsToMany(FileSource, {
+  through: HostFileSource,
+  foreignKey: 'host_id',
+  otherKey: 'file_source_id',
+  onDelete: 'CASCADE'
+});
+
+FileSource.belongsToMany(Host, {
+  through: HostFileSource,
+  foreignKey: 'file_source_id',
+  otherKey: 'host_id',
+  onDelete: 'CASCADE'
+});
+
+// Связи для HostFileSource (ВАЖНО! ДОБАВЬТЕ ЭТО)
+HostFileSource.belongsTo(Host, { foreignKey: 'host_id' , onDelete: 'CASCADE'});
+HostFileSource.belongsTo(FileSource, { foreignKey: 'file_source_id' , onDelete: 'CASCADE'});
+Host.hasMany(HostFileSource, { foreignKey: 'host_id' , onDelete: 'CASCADE'});
+FileSource.hasMany(HostFileSource, { foreignKey: 'file_source_id' , onDelete: 'CASCADE'});
 
 // Экспорт
 const models = {
@@ -53,6 +72,7 @@ const models = {
   Grouping,
   Country,
   FileSource,
+  HostFileSource,
 };
 
 export {
@@ -66,6 +86,7 @@ export {
   Grouping,
   Country,
   FileSource,
+  HostFileSource,
   sequelize,
   models,
 };

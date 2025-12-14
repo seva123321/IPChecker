@@ -20,9 +20,14 @@ const FileSource = sequelize.define('FileSource', {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW,
   },
+  updated_at: {
+    type: DataTypes.DATE,
+    defaultValue: DataTypes.NOW,
+  },
 }, {
   tableName: 'file_sources',
   timestamps: false,
+  underscored: true
 });
 
 export default FileSource;

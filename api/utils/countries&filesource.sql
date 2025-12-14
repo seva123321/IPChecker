@@ -166,6 +166,114 @@ END;
 $$ LANGUAGE plpgsql;
 
 
+-- ИНСТРУКЦИЯ ПО МНОГИЕ ко МНОГИМ
+
+-- 1. Создайте таблицу связи host_file_sources:
+-- Таблица связи многие-ко-многим между hosts и file_sources
+CREATE TABLE IF NOT EXISTS host_file_sources (
+    id SERIAL PRIMARY KEY,
+    host_id INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    file_source_id INTEGER NOT NULL REFERENCES file_sources(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(host_id, file_source_id) -- чтобы избежать дубликатов
+);
+
+-- Индексы для быстрого поиска
+CREATE INDEX IF NOT EXISTS idx_host_file_sources_host_id ON host_file_sources (host_id);
+CREATE INDEX IF NOT EXISTS idx_host_file_sources_file_source_id ON host_file_sources (file_source_id);
+
+-- 2. Удалите колонку file_source_id из таблицы hosts:
+ALTER TABLE hosts 
+DROP COLUMN IF EXISTS file_source_id;
+
+-- 3. Обновите функцию upsert_host_with_data:
+CREATE OR REPLACE FUNCTION upsert_host_with_data(
+    p_ip TEXT,
+    p_reachable BOOLEAN,
+    p_open_ports INT[],
+    p_filtered_ports INT[],
+    p_whois_data JSONB,
+    p_file_source_name TEXT DEFAULT NULL,
+    p_file_encoding TEXT DEFAULT 'UTF-8'
+)
+RETURNS VOID AS $$
+DECLARE
+    v_host_id INT;
+    v_country_id INT;
+    v_file_source_id INT;
+    v_country_name TEXT;
+BEGIN
+    -- Вставка или получение источника файла
+    IF p_file_source_name IS NOT NULL THEN
+        INSERT INTO file_sources (name, encoding)
+        VALUES (p_file_source_name, p_file_encoding)
+        ON CONFLICT (name) DO UPDATE
+        SET uploaded_at = NOW()
+        RETURNING id INTO v_file_source_id;
+    END IF;
+
+    -- Вставка или обновление хоста
+    INSERT INTO hosts (ip, reachable)
+    VALUES (p_ip::INET, p_reachable)
+    ON CONFLICT (ip) DO UPDATE
+        SET reachable = EXCLUDED.reachable,
+            updated_at = NOW()
+    RETURNING id INTO v_host_id;
+
+    -- Если есть источник файла, создаем связь
+    IF v_file_source_id IS NOT NULL THEN
+        INSERT INTO host_file_sources (host_id, file_source_id)
+        VALUES (v_host_id, v_file_source_id)
+        ON CONFLICT (host_id, file_source_id) DO NOTHING;
+    END IF;
+
+    -- Определяем страну из WHOIS данных
+    v_country_name := COALESCE(
+        p_whois_data->>'country',
+        p_whois_data->>'Country'
+    );
+    
+    IF v_country_name IS NOT NULL THEN
+        v_country_id := get_or_create_country(v_country_name);
+        
+        -- Обновляем страну хоста
+        UPDATE hosts 
+        SET country_id = v_country_id 
+        WHERE id = v_host_id;
+    END IF;
+
+    -- Удаление старых портов и WHOIS
+    DELETE FROM ports WHERE host_id = v_host_id;
+    DELETE FROM whois WHERE host_id = v_host_id;
+
+    -- Вставка новых открытых портов
+    INSERT INTO ports (host_id, port, type)
+    SELECT v_host_id, unnest(p_open_ports), 'open'
+    ON CONFLICT DO NOTHING;
+
+    -- Вставка новых фильтрованных портов
+    INSERT INTO ports (host_id, port, type)
+    SELECT v_host_id, unnest(p_filtered_ports), 'filtered'
+    ON CONFLICT DO NOTHING;
+
+    -- Вставка WHOIS-данных
+    IF p_whois_data IS NOT NULL AND p_whois_data != '{}'::JSONB THEN
+        INSERT INTO whois_keys (key_name)
+        SELECT key
+        FROM jsonb_each_text(p_whois_data)
+        ON CONFLICT (key_name) DO NOTHING;
+
+        INSERT INTO whois (host_id, key_id, value)
+        SELECT
+            v_host_id,
+            k.id,
+            p_whois_data->>w.key
+        FROM jsonb_each_text(p_whois_data) AS w(key, value)
+        JOIN whois_keys k ON k.key_name = w.key;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
 -- -- 1. Таблица стран
 -- CREATE TABLE IF NOT EXISTS countries (
 --     id SERIAL PRIMARY KEY,
