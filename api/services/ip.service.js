@@ -82,7 +82,7 @@ export default class IpService {
 
       return { items };
     } catch (error) {
-      console.error("Ошибка в getFileDb:", error);
+      console.error("Ошибка в getGroupIp:", error);
       throw new Error("Ошибка при получении данных из БД");
     }
   }

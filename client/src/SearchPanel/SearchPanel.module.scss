@@ -135,7 +135,6 @@
     cursor: not-allowed;
   }
 }
-/* Адаптивность на мобильных */
 @media (max-width: 600px) {
   .panel {
     padding: 16px;
@@ -168,9 +167,28 @@
   align-items: end;
 }
 
-.fieldLabel {
-  margin-right: 8px;
-}
+
 .radioGroup {
   color: #218838;
+}
+
+
+.checkboxContainer {
+  display: flex;
+  gap: 16px; 
+  align-items: center;
+  margin: 4px auto;
+
+  .checkboxLabel {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    
+    cursor: pointer; 
+    
+    &:hover {
+      color: #0069d9; 
+    }
+  }
 }

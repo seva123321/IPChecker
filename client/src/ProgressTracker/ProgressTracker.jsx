@@ -24,6 +24,19 @@ import {
 } from '@ant-design/icons'
 import { ROUTES } from '../routes'
 
+const EVENT_TYPES = {
+  CONNECTED: 'connected',
+  PROCESSING_STARTED: 'processing_started',
+  BATCH_COMPLETE: 'batch_complete',
+  FILE_START: 'file_start',
+  FILES_START: 'files_start',
+  FILE_COMPLETE: 'file_complete',
+  FILE_ERROR: 'file_error',
+  PROCESSING_COMPLETED: 'processing_completed',
+  ALL_COMPLETE: 'all_complete',
+  PROCESSING_ERROR: 'processing_error',
+}
+
 export const ProgressTracker = ({
   clientId,
   onComplete,
@@ -97,7 +110,7 @@ export const ProgressTracker = ({
     eventSourceRef.current = eventSource
 
     eventSource.onopen = () => {
-      setConnectionStatus('connected')
+      setConnectionStatus('')
       setCurrentOperation('Ожидание начала обработки...')
       // Сбрасываем счетчики при новом подключении
       progressCountersRef.current = {
@@ -127,12 +140,12 @@ export const ProgressTracker = ({
         console.log('SSE Event:', data)
 
         switch (data.type) {
-          case 'connected':
-            setConnectionStatus('connected')
+          case EVENT_TYPES.CONNECTED:
+            setConnectionStatus(EVENT_TYPES.CONNECTED)
             setCurrentOperation('Готов к обработке файлов')
             break
 
-          case 'files_start':
+          case EVENT_TYPES.FILES_START:
             // Начало обработки нескольких файлов
             progressCountersRef.current.filesTotal = data.totalFiles || 0
             setCurrentOperation(`Начата обработка ${data.totalFiles} файлов`)
@@ -142,7 +155,7 @@ export const ProgressTracker = ({
             }))
             break
 
-          case 'file_start':
+          case EVENT_TYPES.FILE_START:
             const decodedFileName = decodeFileName(data.fileName)
             setFiles((prev) => {
               const exists = prev.find((f) => f.fileName === decodedFileName)
@@ -181,7 +194,7 @@ export const ProgressTracker = ({
             }))
             break
 
-          case 'processing_started':
+          case EVENT_TYPES.PROCESSING_STARTED:
             // Начало обработки IP для текущего файла
             progressCountersRef.current.currentFileStats = {
               totalIPs: data.totalIPs || 0,
@@ -216,12 +229,12 @@ export const ProgressTracker = ({
             }))
             break
 
-          case 'processing_completed':
+          case EVENT_TYPES.PROCESSING_COMPLETED:
             progressCountersRef.current.ipSuccessful += data.successful || 0
             progressCountersRef.current.ipFailed += data.failed || 0
 
             break
-          case 'batch_complete':
+          case EVENT_TYPES.BATCH_COMPLETE:
             // Обновляем статистику текущего файла
             const updatedFileStats = {
               totalIPs: data.totalIPs || 0,
@@ -268,7 +281,14 @@ export const ProgressTracker = ({
             }))
             break
 
-          case 'file_complete':
+            // case EVENT_TYPES.BATCH_COMPLETE: {
+            //   const isCompleted = data.batchIndex === data.totalBatches
+            //   updateProgress((prev) => ({
+            //     completedFiles: prev.completedFiles + isCompleted ? 1 : 0,
+            //   }))
+            //   break
+            // }
+          case EVENT_TYPES.FILE_COMPLETE:
             progressCountersRef.current.filesCompleted++
 
             setFiles((prev) =>
@@ -303,7 +323,7 @@ export const ProgressTracker = ({
             }))
             break
 
-          case 'file_error':
+          case EVENT_TYPES.FILE_ERROR:
             progressCountersRef.current.filesError++
 
             setFiles((prev) =>
@@ -323,7 +343,7 @@ export const ProgressTracker = ({
             )
             break
 
-          case 'all_complete':
+          case EVENT_TYPES.ALL_COMPLETE:
             setConnectionStatus('completed')
             setProgress((prev) => ({
               ...prev,
@@ -337,7 +357,7 @@ export const ProgressTracker = ({
             onComplete?.()
             break
 
-          case 'processing_error':
+          case EVENT_TYPES.PROCESSING_ERROR:
             setConnectionStatus('error')
             setCurrentOperation(`Ошибка обработки: ${data.error}`)
             break
@@ -914,9 +934,9 @@ export const ProgressTracker = ({
   )
 }
 
-/************ */
-// // РАБОЧИЙ КОД
-// import React, { useState, useEffect, useRef } from 'react'
+
+// предложенная оптимизированная версия
+// import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 // import {
 //   Card,
 //   Progress,
@@ -925,10 +945,10 @@ export const ProgressTracker = ({
 //   Col,
 //   Tag,
 //   Alert,
-//   Spin,
 //   Button,
 //   Divider,
 //   Space,
+//   Typography,
 // } from 'antd'
 // import {
 //   FileTextOutlined,
@@ -943,257 +963,782 @@ export const ProgressTracker = ({
 // } from '@ant-design/icons'
 // import { ROUTES } from '../routes'
 
+// const { Title } = Typography
+
+// // Константы для статусов и событий
+// const CONNECTION_STATUS = {
+//   CONNECTING: 'connecting',
+//   CONNECTED: 'connected',
+//   PROCESSING: 'processing',
+//   COMPLETED: 'completed',
+//   ERROR: 'error',
+// }
+
+// const EVENT_TYPES = {
+//   CONNECTED: 'connected',
+//   PROCESSING_STARTED: 'processing_started',
+//   BATCH_COMPLETE: 'batch_complete',
+//   FILE_START: 'file_start',
+//   FILES_START: 'files_start',
+//   FILE_COMPLETE: 'file_complete',
+//   FILE_ERROR: 'file_error',
+//   PROCESSING_COMPLETED: 'processing_completed',
+//   ALL_COMPLETE: 'all_complete',
+//   PROCESSING_ERROR: 'processing_error',
+// }
+
+// const FILE_STATUS = {
+//   PROCESSING: 'processing',
+//   COMPLETED: 'completed',
+//   ERROR: 'error',
+// }
+
+// const INITIAL_PROGRESS = {
+//   processedIPs: 0,
+//   totalIPs: 0,
+//   progress: 0,
+//   successful: 0,
+//   failed: 0,
+//   currentBatch: 0,
+//   totalBatches: 0,
+//   totalFiles: 0,
+//   processedFiles: 0,
+// }
+
+// const INITIAL_COUNTERS = {
+//   filesTotal: 0,
+//   filesProcessed: 0,
+//   filesCompleted: 0,
+//   filesError: 0,
+//   ipTotal: 0,
+//   ipProcessed: 0,
+//   ipSuccessful: 0,
+//   ipFailed: 0,
+//   batchCurrent: 0,
+//   batchTotal: 0,
+//   currentFileStats: {
+//     totalIPs: 0,
+//     processedIPs: 0,
+//     successful: 0,
+//     failed: 0,
+//     progress: 0,
+//   },
+// }
+
+// // Конфигурация статусов
+// const STATUS_CONFIG = {
+//   [CONNECTION_STATUS.CONNECTED]: {
+//     color: 'blue',
+//     icon: <CheckCircleOutlined style={{ color: '#1890ff' }} />,
+//     text: 'Подключено',
+//     progressStatus: 'normal',
+//     strokeColor: '#1890ff',
+//   },
+//   [CONNECTION_STATUS.PROCESSING]: {
+//     color: 'orange',
+//     icon: <LoadingOutlined style={{ color: '#fa8c16' }} />,
+//     text: 'В процессе',
+//     progressStatus: 'active',
+//     strokeColor: '#1890ff',
+//   },
+//   [CONNECTION_STATUS.COMPLETED]: {
+//     color: 'green',
+//     icon: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
+//     text: 'Завершено',
+//     progressStatus: 'success',
+//     strokeColor: '#52c41a',
+//   },
+//   [CONNECTION_STATUS.ERROR]: {
+//     color: 'red',
+//     icon: <CloseCircleOutlined style={{ color: '#ff4d4f' }} />,
+//     text: 'Ошибка',
+//     progressStatus: 'exception',
+//     strokeColor: '#ff4d4f',
+//   },
+//   [CONNECTION_STATUS.CONNECTING]: {
+//     color: 'gray',
+//     icon: <LoadingOutlined />,
+//     text: 'Подключение...',
+//     progressStatus: 'normal',
+//     strokeColor: '#1890ff',
+//   },
+// }
+
+// const FILE_STATUS_CONFIG = {
+//   [FILE_STATUS.PROCESSING]: {
+//     color: 'blue',
+//     text: 'В процессе',
+//     progressStatus: 'active',
+//   },
+//   [FILE_STATUS.COMPLETED]: {
+//     color: 'green',
+//     text: 'Завершён',
+//     progressStatus: 'success',
+//   },
+//   [FILE_STATUS.ERROR]: {
+//     color: 'red',
+//     text: 'Ошибка',
+//     progressStatus: 'exception',
+//   },
+// }
+
+// // Глобальное хранилище для данных прогресса
+// const globalProgressStorage = {
+//   data: new Map(),
+
+//   get(sessionId) {
+//     return this.data.get(sessionId)
+//   },
+
+//   set(sessionId, data) {
+//     this.data.set(sessionId, {
+//       ...data,
+//       timestamp: Date.now(),
+//     })
+//   },
+
+//   delete(sessionId) {
+//     this.data.delete(sessionId)
+//   },
+
+//   cleanupOldData(maxAge = 5 * 60 * 1000) {
+//     const now = Date.now()
+//     for (const [key, data] of this.data.entries()) {
+//       if (now - data.timestamp > maxAge) {
+//         this.data.delete(key)
+//       }
+//     }
+//   },
+// }
+
+// // Глобальное хранилище для соединений SSE
+// const globalSSEConnections = new Map()
+
 // export const ProgressTracker = ({
 //   clientId,
+//   sessionId: externalSessionId,
 //   onComplete,
+//   onClose,
 //   isMinimized = false,
 //   onToggleMinimize,
 //   decodeFileName = (fileName) => fileName,
 //   showExportButtons = true,
+//   isModal = false,
 // }) => {
-//   const [connectionStatus, setConnectionStatus] = useState('connecting')
-//   const [progress, setProgress] = useState({
-//     processedIPs: 0,
-//     totalIPs: 0,
-//     progress: 0,
-//     successful: 0,
-//     failed: 0,
+//   // Состояние
+//   const [connectionStatus, setConnectionStatus] = useState(() => {
+//     if (externalSessionId && globalProgressStorage.get(externalSessionId)) {
+//       return (
+//         globalProgressStorage.get(externalSessionId).connectionStatus ||
+//         CONNECTION_STATUS.CONNECTING
+//       )
+//     }
+//     return CONNECTION_STATUS.CONNECTING
 //   })
-//   const [files, setFiles] = useState([])
-//   const [currentOperation, setCurrentOperation] = useState(
-//     'Подключение к серверу...'
-//   )
+
+//   const [progress, setProgress] = useState(() => {
+//     if (externalSessionId && globalProgressStorage.get(externalSessionId)) {
+//       return {
+//         ...INITIAL_PROGRESS,
+//         ...globalProgressStorage.get(externalSessionId).progress,
+//       }
+//     }
+//     return INITIAL_PROGRESS
+//   })
+
+//   const [files, setFiles] = useState(() => {
+//     if (externalSessionId && globalProgressStorage.get(externalSessionId)) {
+//       return globalProgressStorage.get(externalSessionId).files || []
+//     }
+//     return []
+//   })
+
+//   const [currentOperation, setCurrentOperation] = useState(() => {
+//     if (externalSessionId && globalProgressStorage.get(externalSessionId)) {
+//       return (
+//         globalProgressStorage.get(externalSessionId).currentOperation ||
+//         'Подключение к серверу...'
+//       )
+//     }
+//     return 'Подключение к серверу...'
+//   })
+
 //   const [exportLoading, setExportLoading] = useState(false)
+
+//   // Рефы
+//   const isMountedRef = useRef(false)
+//   const sessionIdRef = useRef(externalSessionId || clientId)
 //   const eventSourceRef = useRef(null)
+//   const reconnectTimeoutRef = useRef(null)
+//   const reconnectAttemptRef = useRef(0)
 
-//   const connectSSE = () => {
-//     if (!clientId) return
+//   // Рефы для хранения текущих значений
+//   const latestProgressRef = useRef(progress)
+//   const latestFilesRef = useRef(files)
+//   const latestConnectionStatusRef = useRef(connectionStatus)
+//   const latestOperationRef = useRef(currentOperation)
 
-//     if (eventSourceRef.current) {
-//       eventSourceRef.current.close()
+//   const progressCountersRef = useRef({ ...INITIAL_COUNTERS })
+
+//   // Добавьте в ProgressTracker функцию для сохранения данных
+//   const saveToStorage = useCallback(() => {
+//     if (sessionIdRef.current && isMountedRef.current) {
+//       globalProgressStorage.set(sessionIdRef.current, {
+//         progress: latestProgressRef.current,
+//         files: latestFilesRef.current,
+//         connectionStatus: latestConnectionStatusRef.current,
+//         currentOperation: latestOperationRef.current,
+//       })
 //     }
+//   }, [])
 
-//     const baseUrl = `${ROUTES.BASE_URL}:${ROUTES.PORT}`
-//     const sseUrl = `${baseUrl}/files/progress?clientId=${clientId}`
+//   // Обновляйте рефы и сохраняйте при изменениях
+//   useEffect(() => {
+//     latestProgressRef.current = progress
+//     latestFilesRef.current = files
+//     latestConnectionStatusRef.current = connectionStatus
+//     latestOperationRef.current = currentOperation
 
-//     const eventSource = new EventSource(sseUrl)
-//     eventSourceRef.current = eventSource
+//     saveToStorage()
+//   }, [progress, files, connectionStatus, currentOperation, saveToStorage])
 
-//     eventSource.onopen = () => {
-//       setConnectionStatus('connected')
-//       setCurrentOperation('Ожидание начала обработки...')
+//   // Обновление рефов при изменении состояния
+//   useEffect(() => {
+//     latestProgressRef.current = progress
+//     latestFilesRef.current = files
+//     latestConnectionStatusRef.current = connectionStatus
+//     latestOperationRef.current = currentOperation
+
+//     // Сохранение в глобальное хранилище
+//     if (sessionIdRef.current) {
+//       globalProgressStorage.set(sessionIdRef.current, {
+//         progress,
+//         files,
+//         connectionStatus,
+//         currentOperation,
+//       })
 //     }
+//   }, [progress, files, connectionStatus, currentOperation])
 
-//     eventSource.onmessage = (event) => {
-//       try {
-//         const data = JSON.parse(event.data)
-//         console.log('SSE Event:', data) // Добавим лог для отладки
+//   // Мемоизированные значения
+//   const statusConfig = useMemo(
+//     () =>
+//       STATUS_CONFIG[connectionStatus] ||
+//       STATUS_CONFIG[CONNECTION_STATUS.CONNECTING],
+//     [connectionStatus]
+//   )
 
-//         switch (data.type) {
-//           case 'connected':
-//             setConnectionStatus('connected')
-//             setCurrentOperation('Готов к обработке файлов')
-//             break
+//   const completedFiles = useMemo(
+//     () => files.filter((f) => f.status === FILE_STATUS.COMPLETED),
+//     [files]
+//   )
 
-//           case 'file_start':
-//             setFiles((prev) => {
-//               const decodedFileName = decodeFileName(data.fileName)
-//               const exists = prev.find((f) => f.fileName === decodedFileName)
-//               if (exists) return prev
+//   const hasCompletedFiles = useMemo(
+//     () => completedFiles.length > 0,
+//     [completedFiles]
+//   )
 
-//               return [
-//                 ...prev,
-//                 {
-//                   fileName: decodedFileName,
-//                   status: 'processing',
-//                   progress: 0,
-//                   fileIndex: data.fileIndex,
-//                   originalFileName: data.fileName, // сохраняем оригинальное имя для экспорта
-//                 },
-//               ]
-//             })
-//             setConnectionStatus('processing')
-//             setCurrentOperation(`Обработка файла: ${decodedFileName}`)
-//             break
+//   // Вспомогательные функции
+//   const updateStatus = useCallback((status, operation = null) => {
+//     if (!isMountedRef.current) return
 
-//           case 'processing_started':
-//             setProgress((prev) => ({
-//               ...prev,
-//               totalIPs: data.totalIPs,
+//     setConnectionStatus(status)
+//     latestConnectionStatusRef.current = status
+
+//     if (operation) {
+//       setCurrentOperation(operation)
+//       latestOperationRef.current = operation
+//     }
+//   }, [])
+
+//   const updateProgress = useCallback((updater) => {
+//     if (!isMountedRef.current) return
+
+//     setProgress((prev) => {
+//       const updates = typeof updater === 'function' ? updater(prev) : updater
+//       const newState = { ...prev, ...updates }
+
+//       // Вычисляем общий прогресс
+//       if (newState.totalIPs > 0) {
+//         newState.progress = Math.round(
+//           (newState.processedIPs / newState.totalIPs) * 100
+//         )
+//       } else {
+//         newState.progress = newState.processedFiles > 0 ? 100 : 0
+//       }
+
+//       newState.progress = Math.min(newState.progress, 100)
+
+//       return newState
+//     })
+//   }, [])
+
+//   const updateFile = useCallback((fileName, updates) => {
+//     setFiles((prev) =>
+//       prev.map((file) =>
+//         file.fileName === fileName ? { ...file, ...updates } : file
+//       )
+//     )
+//   }, [])
+
+//   const addFile = useCallback((fileData) => {
+//     setFiles((prev) => {
+//       const exists = prev.find((f) => f.fileName === fileData.fileName)
+//       if (exists) return prev
+//       return [...prev, fileData]
+//     })
+//   }, [])
+
+//   // Обработчики событий SSE
+//   const handleSSEEvent = useCallback(
+//     (data) => {
+//       switch (data.type) {
+//         case EVENT_TYPES.CONNECTED:
+//           updateStatus(CONNECTION_STATUS.CONNECTED, 'Готов к обработке файлов')
+//           break
+
+//         case EVENT_TYPES.FILES_START:
+//           progressCountersRef.current.filesTotal = data.totalFiles || 0
+//           updateStatus(
+//             CONNECTION_STATUS.PROCESSING,
+//             `Начата обработка ${data.totalFiles} файлов`
+//           )
+//           updateProgress({ totalFiles: data.totalFiles || 0 })
+//           break
+
+//         case EVENT_TYPES.FILE_START:
+//           const decodedFileName = decodeFileName(data.fileName)
+
+//           addFile({
+//             fileName: decodedFileName,
+//             status: FILE_STATUS.PROCESSING,
+//             progress: 0,
+//             fileIndex: data.fileIndex,
+//             originalFileName: data.fileName,
+//             stats: {
+//               totalIPs: 0,
 //               processedIPs: 0,
+//               successful: 0,
+//               failed: 0,
 //               progress: 0,
-//             }))
-//             setCurrentOperation(`Начата обработка ${data.totalIPs} IP-адресов`)
-//             break
+//             },
+//           })
 
-//           case 'batch_start':
-//             setProgress((prev) => ({
-//               ...prev,
-//               currentBatch: data.batchIndex,
-//               totalBatches: data.totalBatches,
-//             }))
-//             setCurrentOperation(
-//               `Обработка батча ${data.batchIndex} из ${data.totalBatches}`
-//             )
-//             break
+//           progressCountersRef.current.filesProcessed++
+//           updateStatus(
+//             CONNECTION_STATUS.PROCESSING,
+//             `Начата обработка файла: ${decodedFileName}`
+//           )
+//           updateProgress({
+//             processedFiles: progressCountersRef.current.filesProcessed,
+//             totalFiles: progressCountersRef.current.filesTotal,
+//           })
+//           break
 
-//           case 'batch_complete':
-//             setProgress((prev) => ({
-//               ...prev,
-//               processedIPs: data.processedIPs,
-//               progress: data.progress,
-//               successful: data.successful || prev.successful,
-//               failed: data.failed || prev.failed,
-//             }))
-//             setFiles((prev) =>
-//               prev.map((file) =>
-//                 file.status === 'processing'
-//                   ? { ...file, progress: data.progress }
-//                   : file
-//               )
-//             )
-//             setCurrentOperation(
-//               `Обработано ${data.processedIPs} из ${data.totalIPs} IP (${data.progress}%)`
-//             )
-//             break
+//         case EVENT_TYPES.PROCESSING_STARTED:
+//           const currentFileStats = {
+//             totalIPs: data.totalIPs || 0,
+//             processedIPs: 0,
+//             successful: 0,
+//             failed: 0,
+//             progress: 0,
+//           }
 
-//           case 'file_complete':
-//             setFiles((prev) =>
-//               prev.map((file) =>
-//                 file.fileName === decodeFileName(data.fileName)
-//                   ? {
-//                       ...file,
-//                       status: 'completed',
-//                       progress: 100,
-//                       result: data.result,
-//                     }
-//                   : file
-//               )
-//             )
-//             setCurrentOperation(
-//               `Файл ${decodeFileName(data.fileName)} обработан`
-//             )
-//             break
+//           progressCountersRef.current.currentFileStats = currentFileStats
+//           progressCountersRef.current.ipTotal += data.totalIPs || 0
 
-//           case 'file_error':
-//             setFiles((prev) =>
-//               prev.map((file) =>
-//                 file.fileName === decodeFileName(data.fileName)
-//                   ? { ...file, status: 'error', error: data.error }
-//                   : file
-//               )
-//             )
-//             setCurrentOperation(
-//               `Ошибка обработки файла: ${decodeFileName(data.fileName)}`
-//             )
-//             break
+//           updateFile(decodeFileName(data.fileName), { stats: currentFileStats })
+//           updateStatus(
+//             CONNECTION_STATUS.PROCESSING,
+//             `Начата обработка ${data.totalIPs || 0} IP-адресов`
+//           )
+//           updateProgress({ totalIPs: progressCountersRef.current.ipTotal })
+//           break
 
-//           case 'all_complete':
-//             setConnectionStatus('completed')
-//             setProgress((prev) => ({ ...prev, progress: 100 }))
-//             setCurrentOperation('Все файлы успешно обработаны')
-//             console.log('All complete, files:', files) // Лог для отладки
-//             break
+//         case EVENT_TYPES.PROCESSING_COMPLETED:
+//           progressCountersRef.current.ipSuccessful += data.successful || 0
+//           progressCountersRef.current.ipFailed += data.failed || 0
+//           break
 
-//           case 'processing_error':
-//             setConnectionStatus('error')
-//             setCurrentOperation(`Ошибка обработки: ${data.error}`)
-//             break
+//         case EVENT_TYPES.BATCH_COMPLETE:
+//           const updatedFileStats = {
+//             totalIPs: data.totalIPs || 0,
+//             processedIPs: data.processedIPs || 0,
+//             successful: data.successful || 0,
+//             failed: data.failed || 0,
+//             progress: data.progress || 0,
+//           }
+
+//           progressCountersRef.current.ipProcessed += data.processedIPs || 0
+
+//           updateFile(decodeFileName(data.fileName), {
+//             progress: data.progress || 0,
+//             stats: { ...updatedFileStats },
+//           })
+
+//           updateStatus(
+//             CONNECTION_STATUS.PROCESSING,
+//             `Обработано ${data.processedIPs || 0} из ${data.totalIPs || 0} IP (${data.progress || 0}%)`
+//           )
+
+//           updateProgress({
+//             processedIPs: progressCountersRef.current.ipProcessed,
+//             successful: progressCountersRef.current.ipSuccessful,
+//             failed: progressCountersRef.current.ipFailed,
+//             progress:
+//               progressCountersRef.current.ipTotal > 0
+//                 ? Math.round(
+//                     (progressCountersRef.current.ipProcessed /
+//                       progressCountersRef.current.ipTotal) *
+//                       100
+//                   )
+//                 : 0,
+//           })
+//           break
+
+//         case EVENT_TYPES.FILE_COMPLETE:
+//           progressCountersRef.current.filesCompleted++
+
+//           updateFile(decodeFileName(data.fileName), {
+//             status: FILE_STATUS.COMPLETED,
+//             progress: 100,
+//             result: data.result,
+//             stats: {
+//               totalIPs: data.result?.total || 0,
+//               processedIPs: data.result?.total || 0,
+//               successful: data.result?.successful || 0,
+//               failed: data.result?.failed || 0,
+//               progress: 100,
+//             },
+//           })
+
+//           updateStatus(
+//             CONNECTION_STATUS.PROCESSING,
+//             `Файл ${decodeFileName(data.fileName)} обработан`
+//           )
+//           updateProgress({
+//             processedFiles: progressCountersRef.current.filesProcessed,
+//             totalFiles: progressCountersRef.current.filesTotal,
+//           })
+//           break
+
+//         case EVENT_TYPES.FILE_ERROR:
+//           progressCountersRef.current.filesError++
+
+//           updateFile(decodeFileName(data.fileName), {
+//             status: FILE_STATUS.ERROR,
+//             error: data.error,
+//             progress: 0,
+//           })
+
+//           updateStatus(
+//             CONNECTION_STATUS.PROCESSING,
+//             `Ошибка обработки файла: ${decodeFileName(data.fileName)}`
+//           )
+//           break
+
+//         case EVENT_TYPES.ALL_COMPLETE:
+//           updateStatus(
+//             CONNECTION_STATUS.COMPLETED,
+//             'Все файлы успешно обработаны'
+//           )
+//           updateProgress({
+//             progress: 100,
+//             processedFiles: progressCountersRef.current.filesTotal,
+//             processedIPs: progressCountersRef.current.ipTotal,
+//             successful: progressCountersRef.current.ipSuccessful,
+//             failed: progressCountersRef.current.ipFailed,
+//           })
+//           onComplete?.()
+//           break
+
+//         case EVENT_TYPES.PROCESSING_ERROR:
+//           updateStatus(
+//             CONNECTION_STATUS.ERROR,
+//             `Ошибка обработки: ${data.error}`
+//           )
+//           break
+
+//         default:
+//           console.warn('Неизвестный тип события:', data.type)
+//       }
+//     },
+//     [
+//       decodeFileName,
+//       updateStatus,
+//       updateProgress,
+//       updateFile,
+//       addFile,
+//       onComplete,
+//     ]
+//   )
+
+//   // Управление SSE соединением
+//   const setupSSEHandlers = useCallback(
+//     (eventSource) => {
+//       if (!eventSource || !isMountedRef.current) return
+
+//       eventSource.onopen = () => {
+//         if (isMountedRef.current) {
+//           updateStatus(
+//             CONNECTION_STATUS.CONNECTED,
+//             'Ожидание начала обработки...'
+//           )
+//           reconnectAttemptRef.current = 0
+//           progressCountersRef.current = { ...INITIAL_COUNTERS }
 //         }
-//       } catch (error) {
-//         console.error('Ошибка обработки события:', error)
+//       }
+
+//       eventSource.onmessage = (event) => {
+//         if (!isMountedRef.current) return
+
+//         try {
+//           const data = JSON.parse(event.data)
+//           handleSSEEvent(data)
+//         } catch (error) {
+//           console.error('Ошибка обработки события:', error)
+//         }
+//       }
+
+//       eventSource.onerror = (error) => {
+//         if (
+//           isMountedRef.current &&
+//           eventSource.readyState === EventSource.CLOSED
+//         ) {
+//           updateStatus(CONNECTION_STATUS.ERROR, 'Ошибка соединения с сервером')
+
+//           if (reconnectAttemptRef.current < 3) {
+//             reconnectAttemptRef.current++
+//             reconnectTimeoutRef.current = setTimeout(() => {
+//               setupSSEHandlers(eventSource)
+//             }, 2000 * reconnectAttemptRef.current)
+//           }
+//         }
+//       }
+//     },
+//     [updateStatus, handleSSEEvent]
+//   )
+
+//   const getOrCreateSSEConnection = useCallback(() => {
+//     if (!clientId) return null
+
+//     const connectionKey = clientId
+
+//     if (globalSSEConnections.has(connectionKey)) {
+//       const existingEventSource = globalSSEConnections.get(connectionKey)
+
+//       if (existingEventSource.readyState === EventSource.OPEN) {
+//         return existingEventSource
+//       } else {
+//         existingEventSource.close()
+//         globalSSEConnections.delete(connectionKey)
 //       }
 //     }
 
-//     eventSource.onerror = (error) => {
-//       if (eventSource.readyState === EventSource.CLOSED) {
-//         setConnectionStatus('error')
-//         setCurrentOperation('Ошибка соединения с сервером')
-//       }
+//     try {
+//       const baseUrl = `${ROUTES.BASE_URL}:${ROUTES.PORT}`
+//       const sseUrl = `${baseUrl}/files/progress?clientId=${sessionIdRef.current}`
+
+//       const eventSource = new EventSource(sseUrl)
+//       globalSSEConnections.set(connectionKey, eventSource)
+
+//       return eventSource
+//     } catch (error) {
+//       console.error('Ошибка создания EventSource для', clientId, error)
+//       return null
 //     }
-//   }
+//   }, [clientId])
+
+//   const connectSSE = useCallback(() => {
+//     if (!clientId || !isMountedRef.current) return
+
+//     const eventSource = getOrCreateSSEConnection()
+//     if (eventSource) {
+//       eventSourceRef.current = eventSource
+//       setupSSEHandlers(eventSource)
+//     } else {
+//       updateStatus(CONNECTION_STATUS.ERROR, 'Не удалось подключиться к серверу')
+//     }
+//   }, [clientId, getOrCreateSSEConnection, setupSSEHandlers, updateStatus])
+
+//   // Очистка
+//   const cleanup = useCallback(() => {
+//     if (reconnectTimeoutRef.current) {
+//       clearTimeout(reconnectTimeoutRef.current)
+//       reconnectTimeoutRef.current = null
+//     }
+
+//     reconnectAttemptRef.current = 0
+//   }, [])
+
+//   const cleanupSession = useCallback(async () => {
+//     try {
+//       await fetch(
+//         `${ROUTES.BASE_URL}:${ROUTES.PORT}/files/cleanup-session/${sessionIdRef.current}`,
+//         {
+//           method: 'DELETE',
+//         }
+//       )
+//     } catch (error) {
+//       console.error('Ошибка при очистке сессии:', error)
+//     }
+//   }, [])
+
+//   // Эффекты
+
+//   // В ProgressTracker добавьте эту функцию для инициализации соединения
+//   useEffect(() => {
+//     isMountedRef.current = true
+//     globalProgressStorage.cleanupOldData()
+
+//     // Восстанавливаем состояние из хранилища
+//     if (externalSessionId && globalProgressStorage.get(externalSessionId)) {
+//       const savedData = globalProgressStorage.get(externalSessionId)
+//       setProgress(savedData.progress || INITIAL_PROGRESS)
+//       setFiles(savedData.files || [])
+//       setConnectionStatus(
+//         savedData.connectionStatus || CONNECTION_STATUS.CONNECTING
+//       )
+//       setCurrentOperation(
+//         savedData.currentOperation || 'Подключение к серверу...'
+//       )
+//     }
+
+//     if (clientId) {
+//       console.log('Подключаем SSE для:', {
+//         clientId,
+//         sessionId: externalSessionId,
+//       })
+//       connectSSE()
+//     }
+
+//     return () => {
+//       isMountedRef.current = false
+//       cleanup()
+//     }
+//   }, [clientId, externalSessionId, connectSSE, cleanup])
 
 //   useEffect(() => {
+//     isMountedRef.current = true
+//     globalProgressStorage.cleanupOldData()
+
 //     if (clientId) {
 //       connectSSE()
 //     }
 
 //     return () => {
-//       if (eventSourceRef.current) {
-//         eventSourceRef.current.close()
-//       }
+//       isMountedRef.current = false
+//       cleanup()
 //     }
-//   }, [clientId])
+//   }, [clientId, connectSSE, cleanup])
 
-// // Экспорт одного файла
-// // В ProgressTracker компоненте исправьте exportSingleFile:
+//   useEffect(() => {
+//     if (
+//       connectionStatus === CONNECTION_STATUS.COMPLETED ||
+//       connectionStatus === CONNECTION_STATUS.ERROR
+//     ) {
+//       const cleanupTimer = setTimeout(() => {
+//         if (clientId && globalSSEConnections.has(clientId)) {
+//           const eventSource = globalSSEConnections.get(clientId)
+//           eventSource.close()
+//           globalSSEConnections.delete(clientId)
+//         }
+//       }, 30000)
 
-// const exportSingleFile = async (fileName) => {
-//   try {
-//     setExportLoading(true);
-//     console.log('Exporting file:', fileName);
-
-//     // Проверяем, нужно ли преобразовать имя файла для совместимости
-//     let exportFileName = fileName;
-
-//     // Если имя содержит специальные символы, может потребоваться кодирование
-//     if (fileName.includes('[') || fileName.includes(']') || fileName.includes('—')) {
-//       // Но мы будем искать файл по оригинальному имени
-//       console.log('Файл содержит специальные символы, используем оригинальное имя');
+//       return () => clearTimeout(cleanupTimer)
 //     }
+//   }, [connectionStatus, clientId])
 
-//     // Отправляем имя файла как есть
-//     const response = await fetch(`http://localhost:5000/files/export/${fileName}`);
-
-//     if (!response.ok) {
-//       if (response.status === 404) {
-//         throw new Error('Файл не найден на сервере');
-//       }
-//       throw new Error(`HTTP error! status: ${response.status}`);
+//   // В обработчике закрытия
+//   const handleClose = () => {
+//     // Закрываем соединение
+//     if (clientId && globalSSEConnections.has(clientId)) {
+//       const eventSource = globalSSEConnections.get(clientId)
+//       eventSource.close()
+//       globalSSEConnections.delete(clientId)
 //     }
 
-//     const blob = await response.blob();
-
-//     // Получаем имя файла из заголовка или используем оригинальное
-//     const contentDisposition = response.headers.get('Content-Disposition');
-//     let downloadName = `${fileName}_export.json`;
-
-//     if (contentDisposition) {
-//       const filenameMatch = contentDisposition.match(/filename="?(.+?)"?$/);
-//       if (filenameMatch) {
-//         downloadName = filenameMatch[1];
-//       }
+//     // Удаляем данные из хранилища
+//     if (sessionIdRef.current) {
+//       globalProgressStorage.delete(sessionIdRef.current)
 //     }
 
-//     const url = window.URL.createObjectURL(blob);
-//     const a = document.createElement('a');
-//     a.href = url;
-//     a.download = downloadName;
-//     document.body.appendChild(a);
-//     a.click();
-//     window.URL.revokeObjectURL(url);
-//     document.body.removeChild(a);
-
-//     console.log('File exported successfully');
-//   } catch (error) {
-//     console.error('Ошибка экспорта:', error);
-//     alert(`Ошибка экспорта: ${error.message}`);
-//   } finally {
-//     setExportLoading(false);
+//     cleanup()
+//     cleanupSession()
+//     onClose?.()
 //   }
-// }
 
-//   // Экспорт всех файлов в ZIP
-//   const exportAllFiles = async () => {
+//   // Функции экспорта
+//   const exportSingleFile = useCallback(
+//     async (fileName) => {
+//       try {
+//         setExportLoading(true)
+//         const fileToExport = files.find((f) => f.fileName === fileName)
+//         const exportName = fileToExport?.originalFileName || fileName
+
+//         const response = await fetch(
+//           `${ROUTES.BASE_URL}:${ROUTES.PORT}/files/export/${fileName}`
+//         )
+
+//         if (!response.ok) {
+//           if (response.status === 404) {
+//             throw new Error('Файл не найден на сервере')
+//           }
+//           throw new Error(`HTTP error! status: ${response.status}`)
+//         }
+
+//         const blob = await response.blob()
+//         const contentDisposition = response.headers.get('Content-Disposition')
+//         let downloadName = `${fileName}_export.json`
+
+//         if (contentDisposition) {
+//           const filenameMatch = contentDisposition.match(/filename="?(.+?)"?$/)
+//           if (filenameMatch) {
+//             downloadName = filenameMatch[1]
+//           }
+//         }
+
+//         const url = window.URL.createObjectURL(blob)
+//         const a = document.createElement('a')
+//         a.href = url
+//         a.download = downloadName
+//         document.body.appendChild(a)
+//         a.click()
+//         window.URL.revokeObjectURL(url)
+//         document.body.removeChild(a)
+//       } catch (error) {
+//         console.error('Ошибка экспорта:', error)
+//         alert(`Ошибка экспорта: ${error.message}`)
+//       } finally {
+//         setExportLoading(false)
+//       }
+//     },
+//     [files]
+//   )
+
+//   const exportAllFiles = useCallback(async () => {
 //     try {
 //       setExportLoading(true)
-//       const sessionId = clientId
-//       console.log('Exporting all files for session:', sessionId)
+//       const sessionId = sessionIdRef.current
+
+//       const checkResponse = await fetch(
+//         `${ROUTES.BASE_URL}:${ROUTES.PORT}/files/check-session/${sessionId}`
+//       )
+
+//       const checkData = await checkResponse.json()
+
+//       if (!checkData.exists) {
+//         throw new Error(
+//           'Сессия не найдена. Возможно, файлы уже были экспортированы и удалены.'
+//         )
+//       }
+
+//       if (checkData.fileCount === 0) {
+//         throw new Error('В сессии нет файлов для экспорта')
+//       }
 
 //       const response = await fetch(
-//         // `http://localhost:5000/files/export-all/json` //@TODO 1json для всего в zip
-
-//         `http://localhost:5000/files/export-all?sessionId=${sessionId}`
+//         `${ROUTES.BASE_URL}:${ROUTES.PORT}/files/export-all?sessionId=${sessionId}`
 //       )
 
 //       if (!response.ok) {
@@ -1204,133 +1749,354 @@ export const ProgressTracker = ({
 //       const url = window.URL.createObjectURL(blob)
 //       const a = document.createElement('a')
 //       a.href = url
-//       a.download = `export_${sessionId}_${Date.now()}.zip`
+//       a.download = `export_session_${sessionId}_${Date.now()}.zip`
 //       document.body.appendChild(a)
 //       a.click()
 //       window.URL.revokeObjectURL(url)
 //       document.body.removeChild(a)
-
-//       console.log('All files exported successfully')
 //     } catch (error) {
 //       console.error('Ошибка экспорта всех файлов:', error)
-//       // Можно добавить уведомление об ошибке
+//       alert(`Ошибка экспорта: ${error.message}`)
 //     } finally {
 //       setExportLoading(false)
 //     }
-//   }
+//   }, [])
 
-//   const getStatusColor = () => {
-//     switch (connectionStatus) {
-//       case 'connected':
-//         return 'blue'
-//       case 'processing':
-//         return 'orange'
-//       case 'completed':
-//         return 'green'
-//       case 'error':
-//         return 'red'
-//       default:
-//         return 'gray'
-//     }
-//   }
+//   // Компоненты представления
+//   const renderStatistics = () => (
+//     <Row gutter={16}>
+//       <Col span={6}>
+//         <Statistic
+//           title="Файлов"
+//           value={progress.processedFiles || completedFiles.length}
+//           suffix={progress.totalFiles > 0 ? `/ ${progress.totalFiles}` : ''}
+//           prefix={<FileTextOutlined />}
+//           valueStyle={{
+//             fontSize: '18px',
+//             color:
+//               progress.processedFiles === progress.totalFiles &&
+//               progress.totalFiles > 0
+//                 ? '#52c41a'
+//                 : '#1890ff',
+//           }}
+//         />
+//       </Col>
+//       <Col span={6}>
+//         <Statistic
+//           title="IP адресов"
+//           value={progress.processedIPs}
+//           suffix={progress.totalIPs > 0 ? `/ ${progress.totalIPs}` : ''}
+//           prefix={<CloudUploadOutlined />}
+//           valueStyle={{ fontSize: '18px' }}
+//         />
+//       </Col>
+//       <Col span={6}>
+//         <Statistic
+//           title="Успешно"
+//           value={progress.successful}
+//           valueStyle={{ color: '#52c41a', fontSize: '18px' }}
+//         />
+//       </Col>
+//       <Col span={6}>
+//         <Statistic
+//           title="Ошибок"
+//           value={progress.failed}
+//           valueStyle={{
+//             color: progress.failed > 0 ? '#ff4d4f' : '#666',
+//             fontSize: '18px',
+//           }}
+//         />
+//       </Col>
+//     </Row>
+//   )
 
-//   const getStatusIcon = () => {
-//     switch (connectionStatus) {
-//       case 'connected':
-//         return <LoadingOutlined />
-//       case 'processing':
-//         return <LoadingOutlined />
-//       case 'completed':
-//         return <CheckCircleOutlined />
-//       case 'error':
-//         return <CloseCircleOutlined />
-//       default:
-//         return <LoadingOutlined />
-//     }
-//   }
-
-//   const getStatusText = () => {
-//     switch (connectionStatus) {
-//       case 'connected':
-//         return 'Подключено'
-//       case 'processing':
-//         return 'В процессе'
-//       case 'completed':
-//         return 'Завершено'
-//       case 'error':
-//         return 'Ошибка'
-//       default:
-//         return 'Подключение...'
-//     }
-//   }
-
-//   const completedFiles = files.filter((f) => f.status === 'completed')
-//   const hasCompletedFiles = completedFiles.length > 0
-
-//   console.log('Current state:', {
-//     connectionStatus,
-//     files,
-//     completedFiles,
-//     hasCompletedFiles,
-//     showExportButtons,
-//   })
-
-//   // Компактный вид для свернутого состояния
-//   if (isMinimized) {
-//     return (
+//   const renderBatchInfo = () =>
+//     progress.totalBatches > 0 && (
 //       <div
 //         style={{
-//           padding: '12px 16px',
-//           background: '#f0f8ff',
-//           border: '1px solid #d6e4ff',
-//           borderRadius: '8px',
-//           cursor: 'pointer',
+//           marginTop: 12,
+//           paddingTop: 12,
+//           borderTop: '1px solid #f0f0f0',
 //         }}
+//       >
+//         <div style={{ color: '#666', fontSize: '12px', textAlign: 'center' }}>
+//           Батч: {progress.currentBatch} / {progress.totalBatches}
+//         </div>
+//       </div>
+//     )
+
+//   const renderExportButtons = () =>
+//     showExportButtons &&
+//     connectionStatus === CONNECTION_STATUS.COMPLETED &&
+//     hasCompletedFiles && (
+//       <div
+//         style={{
+//           marginTop: 16,
+//           paddingTop: 16,
+//           borderTop: '1px solid #f0f0f0',
+//         }}
+//       >
+//         <div style={{ textAlign: 'center' }}>
+//           <Space direction="vertical" style={{ width: '100%' }}>
+//             <Button
+//               type="primary"
+//               icon={<ExportOutlined />}
+//               onClick={exportAllFiles}
+//               loading={exportLoading}
+//               size="large"
+//               style={{ marginBottom: 8 }}
+//             >
+//               Экспортировать все файлы в ZIP
+//             </Button>
+//             <div style={{ color: '#666', fontSize: '12px' }}>
+//               Или экспортируйте отдельные файлы ниже
+//             </div>
+//           </Space>
+//         </div>
+//       </div>
+//     )
+
+//   const renderFileItem = (file, index) => {
+//     const fileStatusConfig =
+//       FILE_STATUS_CONFIG[file.status] ||
+//       FILE_STATUS_CONFIG[FILE_STATUS.PROCESSING]
+
+//     return (
+//       <div
+//         key={file.fileName || index}
+//         style={{ marginBottom: index < files.length - 1 ? 12 : 0 }}
 //       >
 //         <div
 //           style={{
 //             display: 'flex',
 //             justifyContent: 'space-between',
-//             alignItems: 'center',
+//             alignItems: 'flex-start',
+//             marginBottom: 8,
 //           }}
 //         >
-//           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-//             {getStatusIcon()}
-//             <span style={{ fontWeight: '500' }}>
-//               Обработка: {progress.progress}%
-//             </span>
+//           <div style={{ flex: 1 }}>
+//             <div style={{ fontWeight: '500', marginBottom: 4 }}>
+//               {file.fileName}
+//             </div>
+//             <Progress
+//               percent={file.progress || 0}
+//               size="small"
+//               style={{ marginBottom: 4 }}
+//               status={fileStatusConfig.progressStatus}
+//             />
 //           </div>
-//           <Button
-//             type="text"
-//             icon={<ArrowsAltOutlined />}
-//             onClick={(e) => {
-//               e.stopPropagation()
-//               onToggleMinimize?.()
-//             }}
-//           />
+//           <Space>
+//             {showExportButtons && file.status === FILE_STATUS.COMPLETED && (
+//               <Button
+//                 type="link"
+//                 icon={<DownloadOutlined />}
+//                 onClick={() => exportSingleFile(file.fileName)}
+//                 size="small"
+//                 loading={exportLoading}
+//               >
+//                 Экспорт JSON
+//               </Button>
+//             )}
+//             <Tag color={fileStatusConfig.color}>
+//               {fileStatusConfig.text}
+//               {file.status === FILE_STATUS.PROCESSING &&
+//                 ` ${file.progress || 0}%`}
+//             </Tag>
+//           </Space>
 //         </div>
-//         <Progress
-//           percent={progress.progress}
-//           size="small"
-//           style={{ marginTop: '8px' }}
-//           status={
-//             connectionStatus === 'processing'
-//               ? 'active'
-//               : connectionStatus === 'completed'
-//                 ? 'success'
-//                 : connectionStatus === 'error'
-//                   ? 'exception'
-//                   : 'normal'
-//           }
-//         />
+
+//         {file.stats && (
+//           <Row
+//             gutter={8}
+//             style={{ fontSize: '12px', color: '#666', marginTop: 4 }}
+//           >
+//             <Col span={6}>
+//               IP: {file.stats.processedIPs}/{file.stats.totalIPs}
+//             </Col>
+//             <Col span={6} style={{ color: '#52c41a' }}>
+//               Успешно: {file.stats.successful}
+//             </Col>
+//             <Col
+//               span={6}
+//               style={{ color: file.stats.failed > 0 ? '#ff4d4f' : '#666' }}
+//             >
+//               Ошибок: {file.stats.failed}
+//             </Col>
+//             <Col span={6}>Прогресс: {file.stats.progress}%</Col>
+//           </Row>
+//         )}
+
+//         {file.error && (
+//           <Alert
+//             message={file.error}
+//             type="error"
+//             size="small"
+//             showIcon
+//             style={{ marginTop: 8 }}
+//           />
+//         )}
+
+//         {index < files.length - 1 && <Divider style={{ margin: '12px 0' }} />}
 //       </div>
 //     )
 //   }
 
+//   const renderFilesList = () =>
+//     files.length > 0 && (
+//       <Card
+//         title={`Обработка файлов (${files.length})`}
+//         size="small"
+//         style={{ marginBottom: 16 }}
+//       >
+//         {files.map(renderFileItem)}
+//       </Card>
+//     )
+
+//   const renderStatusMessage = () => {
+//     if (connectionStatus === CONNECTION_STATUS.ERROR) {
+//       return (
+//         <Alert
+//           message="Произошла ошибка"
+//           description="Попробуйте перезагрузить страницу и повторить попытку."
+//           type="error"
+//           showIcon
+//         />
+//       )
+//     }
+
+//     if (connectionStatus === CONNECTION_STATUS.COMPLETED) {
+//       return (
+//         <Alert
+//           message="Обработка завершена"
+//           description={
+//             hasCompletedFiles
+//               ? `Обработано ${completedFiles.length} файлов, ${progress.successful} IP адресов успешно. Вы можете экспортировать результаты.`
+//               : 'Обработка завершена, но нет файлов для экспорта.'
+//           }
+//           type="success"
+//           showIcon
+//         />
+//       )
+//     }
+
+//     return null
+//   }
+
+//   // Свернутый вид
+//   const renderMinimizedView = () => (
+//     <div
+//       style={{
+//         padding: '12px 16px',
+//         background: '#f0f8ff',
+//         border: '1px solid #d6e4ff',
+//         borderRadius: '8px',
+//         minWidth: 300,
+//       }}
+//     >
+//       <div
+//         style={{
+//           display: 'flex',
+//           justifyContent: 'space-between',
+//           alignItems: 'center',
+//           marginBottom: 8,
+//         }}
+//       >
+//         <div
+//           style={{
+//             display: 'flex',
+//             alignItems: 'center',
+//             gap: '8px',
+//             cursor: 'pointer',
+//           }}
+//           onClick={() => onToggleMinimize?.()}
+//         >
+//           {statusConfig.icon}
+//           <span style={{ fontWeight: '500', fontSize: '14px' }}>
+//             Обработка: {progress.progress}%
+//           </span>
+//         </div>
+//         <div style={{ display: 'flex', gap: '4px' }}>
+//           <Button
+//             type="text"
+//             icon={isModal ? <MinusOutlined /> : <ArrowsAltOutlined />}
+//             onClick={(e) => {
+//               e.stopPropagation()
+//               onToggleMinimize?.()
+//             }}
+//             size="small"
+//             title={isModal ? 'Свернуть' : 'Развернуть'}
+//           />
+//           <Button
+//             type="text"
+//             icon={<CloseCircleOutlined />}
+//             onClick={(e) => {
+//               e.stopPropagation()
+//               handleClose()
+//             }}
+//             size="small"
+//             danger
+//           />
+//         </div>
+//       </div>
+
+//       <Progress
+//         percent={progress.progress}
+//         size="small"
+//         style={{ marginBottom: 8 }}
+//         status={statusConfig.progressStatus}
+//         strokeColor={statusConfig.strokeColor}
+//         showInfo={false}
+//       />
+
+//       <div style={{ fontSize: '12px', color: '#666', marginBottom: 4 }}>
+//         {currentOperation}
+//       </div>
+
+//       <Row gutter={8} style={{ fontSize: '12px', color: '#666' }}>
+//         <Col span={6}>
+//           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+//             <FileTextOutlined style={{ color: '#1890ff', fontSize: '10px' }} />
+//             <span>
+//               {progress.processedFiles || 0}/{progress.totalFiles || 0}
+//             </span>
+//           </div>
+//         </Col>
+//         <Col span={6}>
+//           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+//             <CloudUploadOutlined
+//               style={{ color: '#1890ff', fontSize: '10px' }}
+//             />
+//             <span>
+//               {progress.processedIPs || 0}/{progress.totalIPs || 0}
+//             </span>
+//           </div>
+//         </Col>
+//         <Col span={6}>
+//           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+//             <CheckCircleOutlined
+//               style={{ color: '#52c41a', fontSize: '10px' }}
+//             />
+//             <span>{progress.successful || 0}</span>
+//           </div>
+//         </Col>
+//         <Col span={6}>
+//           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+//             <CloseCircleOutlined
+//               style={{
+//                 color: progress.failed > 0 ? '#ff4d4f' : '#666',
+//                 fontSize: '10px',
+//               }}
+//             />
+//             <span>{progress.failed || 0}</span>
+//           </div>
+//         </Col>
+//       </Row>
+//     </div>
+//   )
+
 //   // Полный вид
-//   return (
+//   const renderFullView = () => (
 //     <div>
-//       {/* Шапка с общей информацией */}
 //       <Card
 //         size="small"
 //         style={{ marginBottom: 16 }}
@@ -1342,19 +2108,32 @@ export const ProgressTracker = ({
 //               alignItems: 'center',
 //             }}
 //           >
-//             <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-//               {getStatusIcon()}
-//               <span>Обработка файлов</span>
-//               <Tag color={getStatusColor()}>{getStatusText()}</Tag>
-//             </span>
-//             {onToggleMinimize && (
+//             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+//               {statusConfig.icon}
+//               <Tag color={statusConfig.color}>{statusConfig.text}</Tag>
+//               <span style={{ fontSize: '12px', color: '#999' }}>
+//                 ID: {sessionIdRef.current?.substring(0, 8)}
+//               </span>
+//             </div>
+//             <div style={{ display: 'flex', gap: '4px' }}>
+//               {onToggleMinimize && (
+//                 <Button
+//                   type="text"
+//                   icon={isModal ? <MinusOutlined /> : <ArrowsAltOutlined />}
+//                   onClick={onToggleMinimize}
+//                   title={isModal ? 'Свернуть' : 'Развернуть'}
+//                   size="small"
+//                 />
+//               )}
 //               <Button
 //                 type="text"
-//                 icon={<MinusOutlined />}
-//                 onClick={onToggleMinimize}
-//                 title="Свернуть"
+//                 icon={<CloseCircleOutlined />}
+//                 onClick={handleClose}
+//                 title="Закрыть"
+//                 size="small"
+//                 danger
 //               />
-//             )}
+//             </div>
 //           </div>
 //         }
 //       >
@@ -1362,222 +2141,24 @@ export const ProgressTracker = ({
 //           <div style={{ color: '#666', fontSize: '14px', marginBottom: '8px' }}>
 //             {currentOperation}
 //           </div>
-
 //           <Progress
 //             percent={progress.progress}
-//             status={
-//               connectionStatus === 'processing'
-//                 ? 'active'
-//                 : connectionStatus === 'completed'
-//                   ? 'success'
-//                   : connectionStatus === 'error'
-//                     ? 'exception'
-//                     : 'normal'
-//             }
-//             strokeColor={
-//               connectionStatus === 'completed'
-//                 ? '#52c41a'
-//                 : connectionStatus === 'error'
-//                   ? '#ff4d4f'
-//                   : '#1890ff'
-//             }
+//             status={statusConfig.progressStatus}
+//             strokeColor={statusConfig.strokeColor}
+//             strokeWidth={8}
 //           />
 //         </div>
 
-//         {/* Статистика */}
-//         <Row gutter={16}>
-//           <Col span={6}>
-//             <Statistic
-//               title="Файлов"
-//               value={completedFiles.length}
-//               suffix={`/ ${files.length}`}
-//               prefix={<FileTextOutlined />}
-//               valueStyle={{
-//                 fontSize: '18px',
-//                 color:
-//                   completedFiles.length === files.length
-//                     ? '#52c41a'
-//                     : '#1890ff',
-//               }}
-//             />
-//           </Col>
-//           <Col span={6}>
-//             <Statistic
-//               title="IP адресов"
-//               value={progress.processedIPs}
-//               suffix={progress.totalIPs > 0 ? `/ ${progress.totalIPs}` : ''}
-//               prefix={<CloudUploadOutlined />}
-//               valueStyle={{ fontSize: '18px' }}
-//             />
-//           </Col>
-//           <Col span={6}>
-//             <Statistic
-//               title="Успешно"
-//               value={progress.successful}
-//               valueStyle={{ color: '#52c41a', fontSize: '18px' }}
-//             />
-//           </Col>
-//           <Col span={6}>
-//             <Statistic
-//               title="Ошибок"
-//               value={progress.failed}
-//               valueStyle={{
-//                 color: progress.failed > 0 ? '#ff4d4f' : '#666',
-//                 fontSize: '18px',
-//               }}
-//             />
-//           </Col>
-//         </Row>
-
-//         {/* Кнопки экспорта - упростим условия появления */}
-//         {showExportButtons &&
-//           connectionStatus === 'completed' &&
-//           hasCompletedFiles && (
-//             <div
-//               style={{
-//                 marginTop: 16,
-//                 paddingTop: 16,
-//                 borderTop: '1px solid #f0f0f0',
-//               }}
-//             >
-//               <div style={{ textAlign: 'center' }}>
-//                 <Space direction="vertical" style={{ width: '100%' }}>
-//                   <Button
-//                     type="primary"
-//                     icon={<ExportOutlined />}
-//                     onClick={exportAllFiles}
-//                     loading={exportLoading}
-//                     size="large"
-//                     style={{ marginBottom: 8 }}
-//                   >
-//                     Экспортировать все файлы в ZIP
-//                   </Button>
-//                   <div style={{ color: '#666', fontSize: '12px' }}>
-//                     Или экспортируйте отдельные файлы ниже
-//                   </div>
-//                 </Space>
-//               </div>
-//             </div>
-//           )}
+//         {renderStatistics()}
+//         {renderBatchInfo()}
+//         {renderExportButtons()}
 //       </Card>
 
-//       {/* Детали по файлам */}
-//       {files.length > 0 && (
-//         <Card
-//           title={`Обработка файлов (${files.length})`}
-//           size="small"
-//           style={{ marginBottom: 16 }}
-//         >
-//           {files.map((file, index) => (
-//             <div
-//               key={file.fileName || index}
-//               style={{ marginBottom: index < files.length - 1 ? 12 : 0 }}
-//             >
-//               <div
-//                 style={{
-//                   display: 'flex',
-//                   justifyContent: 'space-between',
-//                   alignItems: 'flex-start',
-//                   marginBottom: 8,
-//                 }}
-//               >
-//                 <div style={{ flex: 1 }}>
-//                   <div style={{ fontWeight: '500', marginBottom: 4 }}>
-//                     {file.fileName}
-//                   </div>
-//                   <Progress
-//                     percent={file.progress || 0}
-//                     size="small"
-//                     style={{ marginBottom: 4 }}
-//                     status={
-//                       file.status === 'processing'
-//                         ? 'active'
-//                         : file.status === 'completed'
-//                           ? 'success'
-//                           : file.status === 'error'
-//                             ? 'exception'
-//                             : 'normal'
-//                     }
-//                   />
-//                 </div>
-//                 <Space>
-//                   {showExportButtons && file.status === 'completed' && (
-//                     <Button
-//                       type="link"
-//                       icon={<DownloadOutlined />}
-//                       onClick={() => exportSingleFile(file.fileName)}
-//                       size="small"
-//                       loading={exportLoading}
-//                     >
-//                       Экспорт JSON
-//                     </Button>
-//                   )}
-//                   <Tag
-//                     color={
-//                       file.status === 'completed'
-//                         ? 'green'
-//                         : file.status === 'error'
-//                           ? 'red'
-//                           : 'blue'
-//                     }
-//                   >
-//                     {file.status === 'completed'
-//                       ? 'Завершён'
-//                       : file.status === 'error'
-//                         ? 'Ошибка'
-//                         : `${file.progress || 0}%`}
-//                   </Tag>
-//                 </Space>
-//               </div>
-
-//               {file.result && (
-//                 <div style={{ fontSize: '12px', color: '#666' }}>
-//                   Обработано IP: {file.result.successful || 0} успешно,{' '}
-//                   {file.result.failed || 0} с ошибками
-//                 </div>
-//               )}
-
-//               {file.error && (
-//                 <Alert
-//                   message={file.error}
-//                   type="error"
-//                   size="small"
-//                   showIcon
-//                   style={{ marginTop: 8 }}
-//                 />
-//               )}
-
-//               {index < files.length - 1 && (
-//                 <Divider style={{ margin: '12px 0' }} />
-//               )}
-//             </div>
-//           ))}
-//         </Card>
-//       )}
-
-//       {/* Сообщение об ошибке */}
-//       {connectionStatus === 'error' && (
-//         <Alert
-//           message="Произошла ошибка"
-//           description="Попробуйте перезагрузить страницу и повторить попытку."
-//           type="error"
-//           showIcon
-//         />
-//       )}
-
-//       {/* Сообщение о завершении */}
-//       {connectionStatus === 'completed' && (
-//         <Alert
-//           message="Обработка завершена"
-//           description={
-//             hasCompletedFiles
-//               ? 'Все файлы успешно обработаны. Вы можете экспортировать результаты используя кнопки выше.'
-//               : 'Обработка завершена, но нет файлов для экспорта.'
-//           }
-//           type="success"
-//           showIcon
-//         />
-//       )}
+//       {renderFilesList()}
+//       {renderStatusMessage()}
 //     </div>
 //   )
+
+//   return isMinimized ? renderMinimizedView() : renderFullView()
 // }
+

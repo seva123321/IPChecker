@@ -1,4 +1,3 @@
-// routes/common.router.js
 import express from "express";
 import {
   getIpInfo,
@@ -6,7 +5,8 @@ import {
   patchIpInfo,
 } from "../controllers/comment.controller.js";
 import { definingTableType } from "../controllers/common.controller.js";
-import { getGrouping } from "../controllers/universalGroup.controller.js";
+// import { getGrouping, getGroupsGrouping, getCountriesGrouping, getPrioritiesGrouping} from "../controllers/universalGroup.controller.js";
+import { getGrouping} from "../controllers/universalGroup.controller.js";
 import {  getInfo } from "../controllers/universalSearcher.controller.js";
 
 const router = express.Router();
@@ -28,7 +28,9 @@ router.post("/search", getInfo);
 // POST /data/group
 router.post("/group", getGrouping);
 
-
+// router.get('/groups/group', getGroupsGrouping);
+// router.get('/countrys/group', getCountriesGrouping);
+// router.get('/prioritys/group', getPrioritiesGrouping);
 
 
 export default router;

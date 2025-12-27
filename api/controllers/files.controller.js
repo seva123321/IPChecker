@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import archiver from "archiver"; // Добавлен импорт
 import FileService from "../services/files.service.js";
-import sessionManager from '../utils/sessionManager.js';
+import sessionManager from "../utils/sessionManager.js";
 import { Op } from "sequelize";
 import {
   Host,
@@ -15,7 +15,6 @@ import {
   Country,
   Priority,
   Grouping,
-  HostFileSource,
 } from "../models/index.js";
 
 // Хранилище для SSE соединений
@@ -120,26 +119,26 @@ export default class FileController {
     try {
       // Получаем clientId из запроса
       const clientId = req.query.clientId || req.body.clientId;
-      
+
       if (!clientId) {
         return res.status(400).json({
           success: false,
-          error: "clientId не указан"
+          error: "clientId не указан",
         });
       }
-      
+
       console.log(`🔄 Обработка файлов для сессии: ${clientId}`);
-      
+
       await this.handleFilesWithProgress(
-        req, 
-        res, 
-        "txt", 
+        req,
+        res,
+        "txt",
         async (content, fileName, progressCallback) => {
           return await FileService.searchIP(
-            content, 
-            fileName, 
-            progressCallback, 
-            clientId  // Передаем clientId
+            content,
+            fileName,
+            progressCallback,
+            clientId // Передаем clientId
           );
         }
       );
@@ -152,13 +151,13 @@ export default class FileController {
   static async cleanupSession(sessionId) {
     try {
       const sessionDir = path.join(process.cwd(), "temp_exports", sessionId);
-      
+
       if (fs.existsSync(sessionDir)) {
         fs.rmSync(sessionDir, { recursive: true, force: true });
         console.log(`🧹 Сессия ${sessionId} удалена`);
         return { success: true, message: `Сессия ${sessionId} удалена` };
       }
-      
+
       return { success: false, message: `Сессия ${sessionId} не найдена` };
     } catch (error) {
       console.error(`❌ Ошибка при удалении сессии ${sessionId}:`, error);
@@ -204,21 +203,27 @@ export default class FileController {
             if (path.extname(fileName).toLowerCase() === `.${extension}`) {
               const fileContent = await fs.promises.readFile(filePath, "utf-8");
 
+              // const data = JSON.parse(fileContent);
+
+              // let totalHosts = 0;
+              // totalHosts += data.meta.statistics.total_hosts;
+
               // Отправляем событие начала обработки файла
               FileController.sendProgressEvent({
                 type: "file_start",
                 clientId,
                 fileIndex,
                 fileName,
+                // total_hosts: totalHosts,
                 // totalFiles: req.files.length,
                 timestamp: new Date().toISOString(),
               });
 
-              console.log(`📤 Вызов serviceFunction для ${fileName}`);
+              // console.log(`📤 Вызов serviceFunction для ${fileName}`);
 
               // Создаем callback для прогресса
               const progressCallback = (progress) => {
-                console.log(`📊 Прогресс для ${fileName}:`)//, progress);
+                // console.log(`📊 Прогресс для ${fileName}:`); //, progress);
                 // Отправляем прогресс обработки IP
                 FileController.sendProgressEvent({
                   ...progress,
@@ -354,81 +359,6 @@ export default class FileController {
         error: "Ошибка сервера при обработке файлов",
         details: error.message,
       });
-    }
-  }
-
-  // Новый метод для сканирования версий сервисов по IP
-  async scanVersionByIP(req, res) {
-    try {
-      const { ip } = req.body;
-
-      if (!ip) {
-        return res.status(400).json({ error: "IP адрес не предоставлен" });
-      }
-
-      console.log(`Запуск сканирования версий для IP: ${ip}`);
-
-      const versionScanResult = await FileService.scanVersionDetection(ip);
-
-      // Проверяем, есть ли ошибка в результате
-      if (versionScanResult.error) {
-        return res.status(400).json({
-          error: `Ошибка при сканировании версий: ${versionScanResult.error}`,
-        });
-      }
-
-      res.status(200).json({
-        message: `Сканирование версий для IP ${ip} завершено`,
-        ip: ip,
-        data: versionScanResult.serviceVersions || [],
-      });
-    } catch (error) {
-      console.error("Ошибка при сканировании версий:", error);
-      res.status(500).json({ error: "Ошибка сервера при сканировании версий" });
-    }
-  }
-
-  // async getFileDb(req, res) {
-  //   try {
-  //     const result = await FileService.getFileDb();
-  //     return res.json(result);
-  //   } catch (error) {
-  //     console.error("Ошибка в getFileDb:", error);
-  //     return res.status(500).json({ error: error.message });
-  //   }
-  // }
-
-  async getFileDbRange(req, res) {
-    try {
-      const { startDate, endDate } = req.query;
-
-      if (!startDate || !endDate) {
-        return res.status(400).json({
-          error: "Необходимо указать startDate и endDate",
-        });
-      }
-
-      // Валидация дат
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-
-      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-        return res.status(400).json({
-          error: "Неверный формат даты. Используйте YYYY-MM-DD",
-        });
-      }
-
-      if (start > end) {
-        return res.status(400).json({
-          error: "startDate не может быть больше endDate",
-        });
-      }
-
-      const result = await FileService.getFileDbRange(startDate, endDate);
-      return res.json(result);
-    } catch (error) {
-      console.error("Ошибка в getFileDbRange:", error);
-      return res.status(500).json({ error: error.message });
     }
   }
 
@@ -632,7 +562,7 @@ export default class FileController {
     }
   }
 
-  // controllers/FileController.js - исправьте экспортные методы
+  // @TODO вынести логику files.service
   static async exportAllFilesAsSingleJSON(req, res) {
     try {
       console.log(`📤 Начало экспорта всех файлов как единый JSON`);
@@ -675,49 +605,49 @@ export default class FileController {
         try {
           // Получаем полные данные файла
           const fullFileData = await FileSource.findOne({
-              where: { id: fileSource.id },
-              include: [
+            where: { id: fileSource.id },
+            include: [
+              {
+                model: Host,
+                include: [
                   {
-                      model: Host,
-                      include: [
-                          {
-                              model: Port,
-                              include: [
-                                  {
-                                      model: WellKnownPort,
-                                      attributes: ["name"],
-                                  },
-                              ],
-                          },
-                          {
-                              model: Whois,
-                              include: [
-                                  {
-                                      model: WhoisKey,
-                                      attributes: ["key_name"],
-                                  },
-                              ],
-                          },
-                          {
-                              model: Priority,
-                              attributes: ["id", "name"],
-                          },
-                          {
-                              model: Grouping,
-                              attributes: ["id", "name"],
-                          },
-                          {
-                              model: Country,
-                              attributes: ["id", "name"],
-                          },
-                          {
-                              model: FileSource, // ДОБАВИТЬ эту связь
-                              attributes: ["id"], // Только ID файлов
-                              through: { attributes: [] } // Не включать атрибуты промежуточной таблицы
-                          }
-                      ],
+                    model: Port,
+                    include: [
+                      {
+                        model: WellKnownPort,
+                        attributes: ["name"],
+                      },
+                    ],
                   },
-              ],
+                  {
+                    model: Whois,
+                    include: [
+                      {
+                        model: WhoisKey,
+                        attributes: ["key_name"],
+                      },
+                    ],
+                  },
+                  {
+                    model: Priority,
+                    attributes: ["id", "name"],
+                  },
+                  {
+                    model: Grouping,
+                    attributes: ["id", "name"],
+                  },
+                  {
+                    model: Country,
+                    attributes: ["id", "name"],
+                  },
+                  {
+                    model: FileSource, // ДОБАВИТЬ эту связь
+                    attributes: ["id"], // Только ID файлов
+                    through: { attributes: [] }, // Не включать атрибуты промежуточной таблицы
+                  },
+                ],
+              },
+            ],
           });
 
           if (!fullFileData.Hosts || fullFileData.Hosts.length === 0) {
@@ -797,7 +727,8 @@ export default class FileController {
       const exportResult = {
         success: true,
         meta: {
-          export_info: { //@TODO убрать везде
+          export_info: {
+            //@TODO убрать везде
             exported_at: new Date().toISOString(),
             export_format: "single_json",
             format_version: "1.0",
@@ -906,7 +837,7 @@ export default class FileController {
     }
   }
 
-  // Экспорт данных по диапазону дат
+  // Экспорт данных по диапазону дат @TODO вынести логику в files.service
   static async exportDataByDateRange(req, res) {
     try {
       const { startDate, endDate } = req.query;
@@ -1210,303 +1141,273 @@ export default class FileController {
     }
   }
 
-  // Вспомогательная функция для расчета совпадения
-  static calculateMatchScore(fileName, searchName) {
-    let score = 0;
-    const fileNameLower = fileName.toLowerCase();
-    const searchNameLower = searchName.toLowerCase();
+  static async exportAllFiles(req, res) {
+    try {
+      const { sessionId } = req.query;
 
-    // Точное совпадение
-    if (fileNameLower === searchNameLower) {
-      score += 100;
-    }
-
-    // Совпадение без учета кодирования
-    if (
-      fileNameLower.replace(/[\[\]%]/g, "") ===
-      searchNameLower.replace(/[\[\]%]/g, "")
-    ) {
-      score += 50;
-    }
-
-    // Содержит искомое имя
-    if (fileNameLower.includes(searchNameLower)) {
-      score += 30;
-    }
-
-    // Искомое имя содержит имя файла
-    if (searchNameLower.includes(fileNameLower)) {
-      score += 20;
-    }
-
-    // Совпадение по ключевым словам
-    const keywords = ["test", "ip_dst", "ip"];
-    keywords.forEach((keyword) => {
-      if (
-        fileNameLower.includes(keyword) &&
-        searchNameLower.includes(keyword)
-      ) {
-        score += 10;
+      if (!sessionId) {
+        return res.status(400).json({
+          success: false,
+          error: "Не указан sessionId",
+        });
       }
-    });
 
-    return score;
-  }
+      console.log(`📤 Начало экспорта всех файлов для сессии: ${sessionId}`);
 
-  // В файле files.controller.js
-static async exportAllFiles(req, res) {
-  try {
-    const { sessionId } = req.query;
-    
-    if (!sessionId) {
-      return res.status(400).json({
-        success: false,
-        error: "Не указан sessionId",
-      });
-    }
+      // Используем SessionManager для проверки и получения файлов
+      if (!sessionManager.sessionExists(sessionId)) {
+        return res.status(404).json({
+          success: false,
+          error: "Сессия не найдена или файлы уже удалены",
+        });
+      }
 
-    console.log(`📤 Начало экспорта всех файлов для сессии: ${sessionId}`);
+      const sessionFiles = sessionManager.getAllSessionFiles(sessionId);
 
-    // Используем SessionManager для проверки и получения файлов
-    if (!sessionManager.sessionExists(sessionId)) {
-      return res.status(404).json({
-        success: false,
-        error: "Сессия не найдена или файлы уже удалены",
-      });
-    }
+      if (!sessionFiles.success || sessionFiles.fileCount === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "В сессии нет файлов для экспорта",
+        });
+      }
 
-    const sessionFiles = sessionManager.getAllSessionFiles(sessionId);
-    
-    if (!sessionFiles.success || sessionFiles.fileCount === 0) {
-      return res.status(404).json({
-        success: false,
-        error: "В сессии нет файлов для экспорта",
-      });
-    }
+      // Создаем временную директорию
+      const tempDir = path.join(process.cwd(), "temp_exports");
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
 
-    // Создаем временную директорию
-    const tempDir = path.join(process.cwd(), "temp_exports");
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
-    }
+      const timestamp = Date.now();
+      const exportDir = path.join(
+        tempDir,
+        `export_session_${sessionId}_${timestamp}`
+      );
+      fs.mkdirSync(exportDir, { recursive: true });
 
-    const timestamp = Date.now();
-    const exportDir = path.join(tempDir, `export_session_${sessionId}_${timestamp}`);
-    fs.mkdirSync(exportDir, { recursive: true });
+      console.log(`📁 Создана временная директория: ${exportDir}`);
 
-    console.log(`📁 Создана временная директория: ${exportDir}`);
+      // Массив для хранения информации об экспортированных файлах
+      const exportSummary = [];
 
-    // Массив для хранения информации об экспортированных файлах
-    const exportSummary = [];
-
-    // Сохраняем каждый файл в экспортную директорию
-    sessionFiles.files.forEach((file, index) => {
-      try {
-        const exportFileName = file.name;
-        const exportFilePath = path.join(exportDir, exportFileName);
-
-        // Если файл уже минифицирован, просто копируем
-        // Если нет - читаем и пересохраняем минифицированным
-        let fileContent;
+      // Сохраняем каждый файл в экспортную директорию
+      sessionFiles.files.forEach((file, index) => {
         try {
-          fileContent = fs.readFileSync(file.path, 'utf8');
-          const parsed = JSON.parse(fileContent);
-          
-          // Минифицируем заново (на случай если файл был не минифицирован)
-          const minified = JSON.stringify(parsed);
-          fs.writeFileSync(exportFilePath, minified, "utf8");
-          
-        } catch (parseError) {
-          // Если не удалось распарсить, просто копируем
-          fs.copyFileSync(file.path, exportFilePath);
+          const exportFileName = file.name;
+          const exportFilePath = path.join(exportDir, exportFileName);
+
+          // Если файл уже минифицирован, просто копируем
+          // Если нет - читаем и пересохраняем минифицированным
+          let fileContent;
+          try {
+            fileContent = fs.readFileSync(file.path, "utf8");
+            const parsed = JSON.parse(fileContent);
+
+            // Минифицируем заново (на случай если файл был не минифицирован)
+            const minified = JSON.stringify(parsed);
+            fs.writeFileSync(exportFilePath, minified, "utf8");
+          } catch (parseError) {
+            // Если не удалось распарсить, просто копируем
+            fs.copyFileSync(file.path, exportFilePath);
+          }
+
+          const fileStats = fs.statSync(exportFilePath);
+
+          // Добавляем в summary
+          exportSummary.push({
+            file_name: file.name,
+            export_file_name: exportFileName,
+            hosts_count: file.data ? file.data.length : 0,
+            reachable_hosts: file.data
+              ? file.data.filter((h) => h.reachable).length
+              : 0,
+            unreachable_hosts: file.data
+              ? file.data.filter((h) => !h.reachable).length
+              : 0,
+            last_updated: file.stats.mtime,
+            statistics: file.meta.statistics || {},
+            file_size: fileStats.size,
+          });
+
+          console.log(
+            `✅ Файл сохранен (минифицирован): ${exportFileName}, размер: ${fileStats.size} bytes`
+          );
+        } catch (fileError) {
+          console.error(
+            `❌ Ошибка при сохранении файла ${file.name}:`,
+            fileError.message
+          );
+          exportSummary.push({
+            file_name: file.name,
+            export_file_name: null,
+            error: fileError.message,
+            hosts_count: 0,
+            reachable_hosts: 0,
+            unreachable_hosts: 0,
+            file_size: 0,
+          });
         }
+      });
 
-        const fileStats = fs.statSync(exportFilePath);
+      if (exportSummary.length === 0) {
+        // Очистка временной директории
+        fs.rmSync(exportDir, { recursive: true, force: true });
 
-        // Добавляем в summary
-        exportSummary.push({
-          file_name: file.name,
-          export_file_name: exportFileName,
-          hosts_count: file.data ? file.data.length : 0,
-          reachable_hosts: file.data ? file.data.filter((h) => h.reachable).length : 0,
-          unreachable_hosts: file.data ? file.data.filter((h) => !h.reachable).length : 0,
-          last_updated: file.stats.mtime,
-          statistics: file.meta.statistics || {},
-          file_size: fileStats.size,
-        });
-
-        console.log(`✅ Файл сохранен (минифицирован): ${exportFileName}, размер: ${fileStats.size} bytes`);
-      } catch (fileError) {
-        console.error(`❌ Ошибка при сохранении файла ${file.name}:`, fileError.message);
-        exportSummary.push({
-          file_name: file.name,
-          export_file_name: null,
-          error: fileError.message,
-          hosts_count: 0,
-          reachable_hosts: 0,
-          unreachable_hosts: 0,
-          file_size: 0,
+        return res.status(404).json({
+          success: false,
+          error: "Не удалось экспортировать ни одного файла",
         });
       }
-    });
 
-    if (exportSummary.length === 0) {
-      // Очистка временной директории
-      fs.rmSync(exportDir, { recursive: true, force: true });
+      // Создаем summary файл с общей статистикой
+      const successfulExports = exportSummary.filter((f) => !f.error);
 
-      return res.status(404).json({
+      const summaryData = {
+        success: true,
+        meta: {
+          export_info: {
+            exported_at: new Date().toISOString(),
+            export_archive_name: `export_session_${sessionId}_${timestamp}.zip`,
+            format_version: "1.0",
+            total_files_processed: exportSummary.length,
+            successfully_exported: successfulExports.length,
+            failed_exports: exportSummary.filter((f) => f.error).length,
+            total_size_bytes: successfulExports.reduce(
+              (sum, file) => sum + file.file_size,
+              0
+            ),
+            session_id: sessionId,
+          },
+          statistics: {
+            total_files: successfulExports.length,
+            total_hosts: successfulExports.reduce(
+              (sum, file) => sum + file.hosts_count,
+              0
+            ),
+            total_reachable_hosts: successfulExports.reduce(
+              (sum, file) => sum + file.reachable_hosts,
+              0
+            ),
+            total_unreachable_hosts: successfulExports.reduce(
+              (sum, file) => sum + file.unreachable_hosts,
+              0
+            ),
+            total_with_whois: successfulExports.reduce(
+              (sum, file) => sum + (file.statistics?.with_whois || 0),
+              0
+            ),
+            total_with_ports: successfulExports.reduce(
+              (sum, file) => sum + (file.statistics?.with_ports || 0),
+              0
+            ),
+          },
+        },
+        files: exportSummary.map((file) => ({
+          original_name: file.file_name,
+          export_file_name: file.export_file_name,
+          success: !file.error,
+          error: file.error,
+          hosts_count: file.hosts_count,
+          reachable_hosts: file.reachable_hosts,
+          unreachable_hosts: file.unreachable_hosts,
+          last_updated: file.last_updated,
+          statistics: file.statistics,
+          file_size: file.file_size,
+        })),
+      };
+
+      const summaryPath = path.join(
+        exportDir,
+        `export_summary_${sessionId}_${timestamp}.json`
+      );
+
+      // Summary файл минифицируем
+      const minifiedSummary = JSON.stringify(summaryData);
+      fs.writeFileSync(summaryPath, minifiedSummary, "utf8");
+
+      // Создаем ZIP архив
+      const archiveFileName = `export_session_${sessionId}_${timestamp}.zip`;
+      const archivePath = path.join(tempDir, archiveFileName);
+
+      return new Promise((resolve, reject) => {
+        const output = fs.createWriteStream(archivePath);
+        const archive = archiver("zip", {
+          zlib: { level: 9 },
+        });
+
+        output.on("close", () => {
+          console.log(
+            `✅ ZIP архив создан: ${archivePath}, размер: ${archive.pointer()} bytes`
+          );
+
+          // Настраиваем заголовки для скачивания
+          res.setHeader("Content-Type", "application/zip");
+          res.setHeader(
+            "Content-Disposition",
+            `attachment; filename="${archiveFileName}"`
+          );
+          res.setHeader("Content-Length", archive.pointer());
+
+          // Отправляем архив
+          const archiveStream = fs.createReadStream(archivePath);
+          archiveStream.pipe(res);
+
+          // Очистка после отправки
+          archiveStream.on("end", () => {
+            try {
+              // Удаляем временные файлы
+              fs.rmSync(exportDir, { recursive: true, force: true });
+              fs.unlinkSync(archivePath);
+
+              // Удаляем оригинальную сессию после успешного экспорта
+              sessionManager.cleanupSession(sessionId);
+
+              console.log(`🧹 Временные файлы и сессия ${sessionId} удалены`);
+            } catch (cleanupError) {
+              console.error(
+                "⚠️ Ошибка при очистке временных файлов:",
+                cleanupError
+              );
+            }
+            resolve();
+          });
+
+          archiveStream.on("error", (error) => {
+            console.error("❌ Ошибка при отправке архива:", error);
+            reject(error);
+          });
+        });
+
+        archive.on("warning", (err) => {
+          if (err.code === "ENOENT") {
+            console.warn("⚠️ Предупреждение archiver:", err);
+          } else {
+            reject(err);
+          }
+        });
+
+        archive.on("error", (err) => {
+          console.error("❌ Ошибка archiver:", err);
+          reject(err);
+        });
+
+        archive.pipe(output);
+
+        // Добавляем все файлы из exportDir в архив
+        archive.directory(exportDir, false);
+
+        // Завершаем архивацию
+        archive.finalize();
+      });
+    } catch (error) {
+      console.error(`❌ Ошибка при экспорте всех файлов сессии:`, error);
+
+      res.status(500).json({
         success: false,
-        error: "Не удалось экспортировать ни одного файла",
+        error: `Ошибка при экспорте всех файлов: ${error.message}`,
+        timestamp: new Date().toISOString(),
       });
     }
-
-    // Создаем summary файл с общей статистикой
-    const successfulExports = exportSummary.filter((f) => !f.error);
-
-    const summaryData = {
-      success: true,
-      meta: {
-        export_info: {
-          exported_at: new Date().toISOString(),
-          export_archive_name: `export_session_${sessionId}_${timestamp}.zip`,
-          format_version: "1.0",
-          total_files_processed: exportSummary.length,
-          successfully_exported: successfulExports.length,
-          failed_exports: exportSummary.filter((f) => f.error).length,
-          total_size_bytes: successfulExports.reduce((sum, file) => sum + file.file_size, 0),
-          session_id: sessionId,
-        },
-        statistics: {
-          total_files: successfulExports.length,
-          total_hosts: successfulExports.reduce(
-            (sum, file) => sum + file.hosts_count,
-            0
-          ),
-          total_reachable_hosts: successfulExports.reduce(
-            (sum, file) => sum + file.reachable_hosts,
-            0
-          ),
-          total_unreachable_hosts: successfulExports.reduce(
-            (sum, file) => sum + file.unreachable_hosts,
-            0
-          ),
-          total_with_whois: successfulExports.reduce(
-            (sum, file) => sum + (file.statistics?.with_whois || 0),
-            0
-          ),
-          total_with_ports: successfulExports.reduce(
-            (sum, file) => sum + (file.statistics?.with_ports || 0),
-            0
-          ),
-        },
-      },
-      files: exportSummary.map((file) => ({
-        original_name: file.file_name,
-        export_file_name: file.export_file_name,
-        success: !file.error,
-        error: file.error,
-        hosts_count: file.hosts_count,
-        reachable_hosts: file.reachable_hosts,
-        unreachable_hosts: file.unreachable_hosts,
-        last_updated: file.last_updated,
-        statistics: file.statistics,
-        file_size: file.file_size,
-      })),
-    };
-
-    const summaryPath = path.join(
-      exportDir,
-      `export_summary_${sessionId}_${timestamp}.json`
-    );
-    
-    // Summary файл минифицируем
-    const minifiedSummary = JSON.stringify(summaryData);
-    fs.writeFileSync(summaryPath, minifiedSummary, "utf8");
-
-    // Создаем ZIP архив
-    const archiveFileName = `export_session_${sessionId}_${timestamp}.zip`;
-    const archivePath = path.join(tempDir, archiveFileName);
-
-    return new Promise((resolve, reject) => {
-      const output = fs.createWriteStream(archivePath);
-      const archive = archiver("zip", {
-        zlib: { level: 9 },
-      });
-
-      output.on("close", () => {
-        console.log(
-          `✅ ZIP архив создан: ${archivePath}, размер: ${archive.pointer()} bytes`
-        );
-
-        // Настраиваем заголовки для скачивания
-        res.setHeader("Content-Type", "application/zip");
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="${archiveFileName}"`
-        );
-        res.setHeader("Content-Length", archive.pointer());
-
-        // Отправляем архив
-        const archiveStream = fs.createReadStream(archivePath);
-        archiveStream.pipe(res);
-
-        // Очистка после отправки
-        archiveStream.on("end", () => {
-          try {
-            // Удаляем временные файлы
-            fs.rmSync(exportDir, { recursive: true, force: true });
-            fs.unlinkSync(archivePath);
-            
-            // Удаляем оригинальную сессию после успешного экспорта
-            sessionManager.cleanupSession(sessionId);
-            
-            console.log(`🧹 Временные файлы и сессия ${sessionId} удалены`);
-          } catch (cleanupError) {
-            console.error(
-              "⚠️ Ошибка при очистке временных файлов:",
-              cleanupError
-            );
-          }
-          resolve();
-        });
-
-        archiveStream.on("error", (error) => {
-          console.error("❌ Ошибка при отправке архива:", error);
-          reject(error);
-        });
-      });
-
-      archive.on("warning", (err) => {
-        if (err.code === "ENOENT") {
-          console.warn("⚠️ Предупреждение archiver:", err);
-        } else {
-          reject(err);
-        }
-      });
-
-      archive.on("error", (err) => {
-        console.error("❌ Ошибка archiver:", err);
-        reject(err);
-      });
-
-      archive.pipe(output);
-
-      // Добавляем все файлы из exportDir в архив
-      archive.directory(exportDir, false);
-
-      // Завершаем архивацию
-      archive.finalize();
-    });
-  } catch (error) {
-    console.error(`❌ Ошибка при экспорте всех файлов сессии:`, error);
-
-    res.status(500).json({
-      success: false,
-      error: `Ошибка при экспорте всех файлов: ${error.message}`,
-      timestamp: new Date().toISOString(),
-    });
   }
-}
 
   static async exportAllFilesFromDB(req, res) {
     try {
@@ -1724,8 +1625,11 @@ static async exportAllFiles(req, res) {
             total_files_processed: exportSummary.length,
             successfully_exported: successfulExports.length,
             failed_exports: exportSummary.filter((f) => f.error).length,
-            total_size_bytes: successfulExports.reduce((sum, file) => sum + file.file_size, 0),
-            minified_files: successfulExports.filter(f => f.minified).length,
+            total_size_bytes: successfulExports.reduce(
+              (sum, file) => sum + file.file_size,
+              0
+            ),
+            minified_files: successfulExports.filter((f) => f.minified).length,
           },
           statistics: {
             total_files: successfulExports.length,
@@ -1771,7 +1675,7 @@ static async exportAllFiles(req, res) {
         exportDir,
         `export_summary_db_${timestamp}.json`
       );
-      
+
       // Summary файл тоже минифицируем
       const minifiedSummary = JSON.stringify(summaryData);
       fs.writeFileSync(summaryPath, minifiedSummary, "utf8");
@@ -1856,30 +1760,6 @@ static async exportAllFiles(req, res) {
     }
   }
 
-  async getExportableFiles(req, res) {
-    try {
-      const { sessionId } = req.query;
-
-      if (!sessionId) {
-        return res.status(400).json({ error: "ID сессии не указан" });
-      }
-
-      // Используем статический метод из FileService
-      const files = await FileService.getFilesList(sessionId);
-
-      res.status(200).json({
-        sessionId,
-        files: files || [],
-      });
-    } catch (error) {
-      console.error("❌ Ошибка при получении списка файлов:", error);
-      res.status(500).json({
-        error: "Ошибка сервера при получении списка файлов",
-        details: error.message,
-      });
-    }
-  }
-
   static async normalizeFileNames(req, res) {
     try {
       const result = await FileService.normalizeFileNames();
@@ -1894,22 +1774,6 @@ static async exportAllFiles(req, res) {
         success: false,
         error: error.message,
       });
-    }
-  }
-
-  static async fixFileAssociations(req, res) {
-    try {
-      const { fileName, ipList } = req.body;
-
-      if (!fileName) {
-        return res.status(400).json({ error: "Имя файла обязательно" });
-      }
-
-      const result = await FileService.fixFileAssociations(fileName, ipList);
-      res.json(result);
-    } catch (error) {
-      console.error("❌ Ошибка при исправлении ассоциаций файлов:", error);
-      res.status(500).json({ error: error.message });
     }
   }
 

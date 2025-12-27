@@ -1,16 +1,14 @@
 import withInfiniteScroll from './hoc/withInfiniteScroll'
 
 const InfiniteList = ({ items, render, hasMore }) => {
-  console.log('InfiniteList')
+  const data = items[0]?.items ?? items
 
-  const data = items[0]?.items ?? items 
-console.log('data > ', data)
   return (
     <>
       {data.map((item, index) => (
         <div key={index}>{render(item)}</div>
       ))}
-      {!hasMore && data.length > 0 && (
+      {!hasMore && data.length && (
         <div
           style={{
             textAlign: 'center',

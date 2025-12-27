@@ -5,13 +5,15 @@ import {
   Priority,
   Grouping,
   Country,
+  FileSource,
+  Host,
 } from "../models/index.js";
 
 export const definingTableType = (req, res) => {
   const { q } = req.query;
 
   switch (q) {
-    case "ports":
+    case "port":
       getPortTable(req, res);
       break;
     case "portsOpened":
@@ -26,11 +28,14 @@ export const definingTableType = (req, res) => {
     case "group":
       getGroupTable(req, res);
       break;
-    case "keywords":
+    case "keyword":
       getKeywordsTable(req, res);
       break;
     case "country":
       getCountryTable(req, res);
+      break;
+    case "files":
+      getHostsByFile(req, res);
       break;
     default:
       break;
@@ -151,7 +156,7 @@ export const getCountryTable = async (req, res) => {
     if (!countries || countries.length === 0) {
       return res.status(404).json({
         error: "Нет результатов удовлетворяющих поиску",
-        data: []
+        data: [],
       });
     }
 
@@ -169,7 +174,6 @@ export const getCountryTable = async (req, res) => {
   }
 };
 
-
 export const getKeywordsTable = async (req, res) => {
   try {
     const whoisData = await WhoisKey.findAll({
@@ -182,9 +186,17 @@ export const getKeywordsTable = async (req, res) => {
     }));
     return res.json({ data });
   } catch (error) {
-    console.error("Ошибка в getGroupTable:", error);
+    console.error("Ошибка в getKeywordsTable:", error);
     return res
       .status(500)
       .json({ error: "Нет результатов удовлетворяющих поиску" });
+  }
+};
+
+export const getHostsByFile = async (req, res) => {
+  try {
+  } catch (error) {
+    console.error("❌ Ошибка при получении файлов для хоста ", error);
+    throw error;
   }
 };

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Input } from '../Input/Input'
 import { Button } from '../Button/Button'
 import cn from './SearchPanel.module.scss'
@@ -8,7 +8,7 @@ import {
   SingleSelectDataList,
 } from '../MultiSelectDataList'
 import DatePicker from '../DatePicker/DatePicker'
-import { Radio, Tooltip } from 'antd'
+import { Checkbox, Radio, Tooltip } from 'antd'
 import { initialDateRange } from '../utils/constant'
 import { DownloadOutlined, ClearOutlined } from '@ant-design/icons'
 
@@ -16,6 +16,8 @@ const defaultInputValues = {
   ip: '',
   portOpened: '',
   portFiltered: '',
+  portOpenedInclude: '',
+  portFilteredInclude: '',
   keyword: '',
   priority: '',
   group: '',
@@ -53,7 +55,7 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
     updateSearchField(field, '')
   }
 
-  const handleClearAll = () => {
+  const handleClearAll = async () => {
     setSearchValue(defaultInputValues)
     setGroupValue('ip') // Сброс radio к значению по умолчанию
   }
@@ -65,6 +67,14 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
 
   const handlePortFilteredChange = (newValue) => {
     updateSearchField('portFiltered', newValue)
+  }
+
+  const handlePortOpenedIncludeChange = (e) => {
+    updateSearchField('portOpenedInclude', e.target.checked)
+  }
+
+  const handlePortFilteredIncludeChange = (e) => {
+    updateSearchField('portFilteredInclude', e.target.checked)
   }
 
   const handlePriorityChange = (newValue) => {
@@ -151,7 +161,6 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
     try {
       // Указываем тип группировки из выбранного radio
       requestData.groupingType = groupValue
-
       // Вызываем колбэк из MainPage
       if (onGroup) {
         await onGroup(requestData)
@@ -197,9 +206,13 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
           </li>
 
           <li className={cn.searchGroup}>
-            <StyledRadio value="ip">
-              <label className={cn.fieldLabel}>Поиск по IP</label>
-            </StyledRadio>
+            <Tooltip title="Выбрать для группипровки">
+              <StyledRadio value="ip" id="radio-ip">
+                <label className={cn.fieldLabel} htmlFor="radio-ip">
+                  Поиск по IP
+                </label>
+              </StyledRadio>
+            </Tooltip>
             <Input
               value={searchValue.ip}
               placeholder="Введите IP"
@@ -211,9 +224,13 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
           </li>
 
           <li className={cn.searchGroup}>
-            <StyledRadio value="ports">
-              <label className={cn.fieldLabel}>Порты</label>
-            </StyledRadio>
+            <Tooltip title="Выбрать для группипровки">
+              <StyledRadio value="port" id="radio-port">
+                <label className={cn.fieldLabel} htmlFor="radio-port">
+                  Порты
+                </label>
+              </StyledRadio>
+            </Tooltip>
             <div className={cn.portWrapper}>
               <MultiSelectDataList
                 service={service}
@@ -222,7 +239,7 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
                 placeholder="Открытые порты"
                 fetchDataUrl="data"
                 getDataPrepared={getPortPrepared}
-                fetchParams={{ q: 'ports' }}
+                fetchParams={{ q: 'port' }}
                 dataListId="portsOpened"
                 mode="multiple"
                 style={{ width: '100%', maxWidth: '300px' }}
@@ -233,36 +250,63 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
                 onChange={handlePortFilteredChange}
                 placeholder="Фильтрованные порты"
                 fetchDataUrl="data"
-                fetchParams={{ q: 'ports' }}
+                fetchParams={{ q: 'port' }}
                 getDataPrepared={getPortPrepared}
                 dataListId="portsFiltered"
                 mode="multiple"
                 style={{ width: '100%', maxWidth: '300px' }}
               />
+              {/* @TODO реализовать функционал */}
+              {/* <div className={cn.checkboxContainer}>
+                <Tooltip title="Открытые порты">
+                  <label className={cn.checkboxLabel}>
+                    <Checkbox
+                      checked={searchValue.portOpenedInclude}
+                      onChange={handlePortOpenedIncludeChange}
+                    />
+                    Открытые
+                  </label>
+                </Tooltip>
+                <Tooltip title="Фильтрованные порты">
+                  <label className={cn.checkboxLabel}>
+                    <Checkbox
+                      checked={searchValue.portFilteredInclude}
+                      onChange={handlePortFilteredIncludeChange}
+                    />
+                    Фильтрованные
+                  </label>
+                </Tooltip>
+              </div> */}
             </div>
           </li>
 
           <li className={cn.searchGroup}>
-            <StyledRadio value="keywords">
-              <label className={cn.fieldLabel}>Ключевые слова</label>
-            </StyledRadio>
+            <Tooltip title="Выбрать для группипровки">
+              <StyledRadio value="keyword" id="radio-keyword">
+                <label className={cn.fieldLabel} htmlFor="radio-keyword">
+                  Ключевые слова
+                </label>
+              </StyledRadio>
+            </Tooltip>
             <MultiSelectDataList
               service={service}
               value={searchValue.keyword}
               onChange={handleKeywordInputChange}
               placeholder="Введите ключевые слова"
               fetchDataUrl="data"
-              fetchParams={{ q: 'keywords' }}
+              fetchParams={{ q: 'keyword' }}
               getDataPrepared={getUniversalPrepared}
-              dataListId="keywords"
+              dataListId="keyword"
               mode="multiple"
               style={{ width: '100%', maxWidth: '300px' }}
             />
           </li>
 
           <li className={cn.searchGroup}>
-            <StyledRadio value="whois">
-              <label className={cn.fieldLabel}>Whois</label>
+            <StyledRadio value="whois" id="radio-whois" disabled>
+              <label className={cn.fieldLabel} htmlFor="radio-whois">
+                Whois
+              </label>
             </StyledRadio>
             <Radio.Group
               onChange={handleWithWhoisChange}
@@ -275,9 +319,13 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
           </li>
 
           <li className={cn.searchGroup}>
-            <StyledRadio value="priority">
-              <label className={cn.fieldLabel}>Приоритет</label>
-            </StyledRadio>
+            <Tooltip title="Выбрать для группипровки">
+              <StyledRadio value="priority" id="radio-priority">
+                <label className={cn.fieldLabel} htmlFor="radio-priority">
+                  Приоритет
+                </label>
+              </StyledRadio>
+            </Tooltip>
             <SingleSelectDataList
               service={service}
               value={searchValue.priority}
@@ -292,9 +340,13 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
           </li>
 
           <li className={cn.searchGroup}>
-            <StyledRadio value="group">
-              <label className={cn.fieldLabel}>Группа</label>
-            </StyledRadio>
+            <Tooltip title="Выбрать для группипровки">
+              <StyledRadio value="group" id="radio-group">
+                <label className={cn.fieldLabel} htmlFor="radio-group">
+                  Группа
+                </label>
+              </StyledRadio>
+            </Tooltip>
             <MultiSelectDataList
               service={service}
               value={searchValue.group}
@@ -310,9 +362,13 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
           </li>
 
           <li className={cn.searchGroup}>
-            <StyledRadio value="country">
-              <label className={cn.fieldLabel}>Страна</label>
-            </StyledRadio>
+            <Tooltip title="Выбрать для группипровки">
+              <StyledRadio value="country" id="radio-country">
+                <label className={cn.fieldLabel} htmlFor="radio-country">
+                  Страна
+                </label>
+              </StyledRadio>
+            </Tooltip>
             <MultiSelectDataList
               service={service}
               value={searchValue.country}
@@ -336,6 +392,7 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
         <Button onClick={handleGroup} className={cn.groupButton}>
           Группировать
         </Button>
+         {/* @TODO реализовать функционал */}
         <Button size="small" className={cn.searchButton}>
           <DownloadOutlined /> Экспорт данных
         </Button>

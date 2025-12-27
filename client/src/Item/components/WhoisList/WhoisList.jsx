@@ -6,10 +6,10 @@ export const WhoisList = ({ whois }) => {
     <List
       items={Object.entries(whois)}
       render={([key, value]) => (
-        <li key={key} className={cn.whoisItem}>
+        <div className={cn.whoisItem}>
           <span className={cn.whoisKey}>{key}:</span>
           <span className={cn.whoisValue}>{String(value)}</span>
-        </li>
+        </div>
       )}
     />
   )
