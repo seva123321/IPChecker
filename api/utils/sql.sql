@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS host_groupings (
     name VARCHAR(100) NOT NULL UNIQUE -- МИД, Гражданская промышленность, Военная промышленность, Новостные организации
 );
 
+CREATE INDEX idx_whois_host_id ON whois(host_id);
+CREATE INDEX idx_whois_key_id ON whois(key_id);
+CREATE INDEX idx_whois_value_lower ON whois(LOWER(value));
+CREATE INDEX idx_whois_keys_key_name_lower ON whois_keys(LOWER(key_name));
+
 -- Вставляем значения по умолчанию
 INSERT INTO host_groupings (name) VALUES
   ('МИД'),
@@ -71,8 +76,18 @@ INSERT INTO host_groupings (name) VALUES
   ('IT-инфраструктура и облака'),
   ('Критическая информационная инфраструктура (КИИ)'),
   ('Социальные сети и мессенджеры'),
-  ('Хостинг-провайдеры и дата-центры')
+  ('Хостинг-провайдеры и дата-центры'),
+  ('Развлекательные платформы и игровые сервисы'), -- Добавить
+  ('Неопределено') -- Добавить
 ON CONFLICT (name) DO NOTHING;
+
+-- update public.hosts 
+-- set grouping_id = 32
+-- where grouping_id  IS NULL
+
+-- INSERT INTO public.countries (name) VALUES
+--   ('Неопределено') -- Добавить
+-- ON CONFLICT (name) DO NOTHING
 
 -- 6. Таблица известных портов
 CREATE TABLE IF NOT EXISTS well_known_ports (
