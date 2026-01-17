@@ -7,6 +7,21 @@ export const useItemData = (initialItem) => {
   const [whois, setWhois] = useState(null)
   const [whoisLoaded, setWhoisLoaded] = useState(false)
 
+  // console.log('initialItem <>', initialItem)
+  // console.log('currentItem <>', currentItem)
+
+  // const handlePriorityStatusUpdate = (updatedData) => {
+  //   setCurrentItem((prev) => ({
+  //     ...prev,
+  //     priority_info: {
+  //       ...prev.priority_info,
+  //       priority: updatedData.priority,
+  //       grouping: updatedData.grouping,
+  //       comment: updatedData.comment,
+  //     },
+  //   }))
+  // }
+
   const handlePriorityStatusUpdate = (updatedData) => {
     setCurrentItem((prev) => ({
       ...prev,
@@ -16,6 +31,15 @@ export const useItemData = (initialItem) => {
         grouping: updatedData.grouping,
         comment: updatedData.comment,
       },
+      // Добавляем явное обновление port_data, если необходимо
+      // Например, если вы хотите добавить новые порты или изменить существующие
+      // Здесь предполагается, что updatedData содержит информацию о новых портах
+      // Если это не так, можно пропустить эту часть
+      port_data: {
+        ...prev.port_data,
+        open: [...prev.port_data.open],
+        filtered: [...prev.port_data.filtered]
+      } 
     }))
   }
 

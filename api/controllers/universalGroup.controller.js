@@ -1,4 +1,3 @@
-// qwen
 import { Sequelize } from "sequelize";
 const { Op } = Sequelize;
 import {
@@ -20,12 +19,16 @@ const formatHostData = (host) => {
   const openPortsSet = new Set();
   const filteredPortsSet = new Set();
 
+  // console.log('host.Ports >> ', host.Ports)
   if (host.Ports && Array.isArray(host.Ports)) {
     host.Ports.forEach((port) => {
+      // console.log('port.WellKnownPort ', port.WellKnownPort)
       const portInfo = {
         port: port.port,
-        name: port.WellKnownPort?.name || null,
+        name: port.name || port.WellKnownPort?.dataValues.name  || null,
+        // name: port.name || null,
       };
+      // console.log('portInfo >> ', portInfo)
       if (port.type === "open" && !openPortsSet.has(port.port)) {
         openPorts.push(portInfo);
         openPortsSet.add(port.port);
@@ -35,6 +38,7 @@ const formatHostData = (host) => {
       }
     });
   }
+  // console.log('openPorts >> ', openPorts)
 
   const hasWhois =
     host.Whois && Array.isArray(host.Whois) && host.Whois.length > 0;
@@ -44,25 +48,26 @@ const formatHostData = (host) => {
     grouping: null,
   };
 
-  if (host.priority_id || host.Priority) {
+  // @TODO изменил Priority => priority county и grouping
+  if (host.priority_id || host.priority) {
     priorityInfo.priority = {
-      id: host.priority_id || host.Priority?.id,
-      name: host.Priority?.name || "Unknown",
+      id: host.priority_id || host.priority?.id,
+      name: host.priority?.name || "Unknown",
     };
   }
 
-  if (host.grouping_id || host.Grouping) {
+  if (host.grouping_id || host.grouping) {
     priorityInfo.grouping = {
-      id: host.grouping_id || host.Grouping?.id,
-      name: host.Grouping?.name || null,
+      id: host.grouping_id || host.grouping?.id,
+      name: host.grouping?.name || null,
     };
   }
 
   // Добавляем информацию о стране
-  const countryInfo = host.Country
+  const countryInfo = host.country
     ? {
-        id: host.Country.id,
-        name: host.Country.name,
+        id: host.country.id,
+        name: host.country.name,
       }
     : null;
 
@@ -566,53 +571,192 @@ export const getGrouping = async (req, res) => {
     );
 
     // Получаем полные данные для отфильтрованных хостов
-    const hosts = await Host.findAll({
-      include: [
-        {
-          model: Port,
-          attributes: ["port", "type"],
-          include: [
-            {
-              model: WellKnownPort,
-              attributes: ["name"],
-              required: false,
-            },
-          ],
-        },
-        {
-          model: Priority,
-          attributes: ["id", "name"],
-          required: false,
-        },
-        {
-          model: Grouping,
-          attributes: ["id", "name"],
-          required: false,
-        },
-        {
-          model: Country,
-          attributes: ["id", "name"],
-          required: false,
-        },
-        {
-          model: Whois,
-          attributes: ["value"],
-          include: [
-            {
-              model: WhoisKey,
-              attributes: ["key_name"],
-              required: false,
-            },
-          ],
-          required: false,
-        },
-      ],
-      where: { id: finalHostIds },
-      order: [
-        ["priority_id", "DESC"],
-        ["updated_at", "DESC"],
-      ],
+    // const hosts = await Host.findAll({
+    //   include: [
+    //     {
+    //       model: Port,
+    //       attributes: ["port", "type"],
+    //       include: [
+    //         {
+    //           model: WellKnownPort,
+    //           attributes: ["name"],
+    //           required: false,
+    //         },
+    //       ],
+    //     },
+    //     {
+    //       model: Priority,
+    //       attributes: ["id", "name"],
+    //       required: false,
+    //     },
+    //     {
+    //       model: Grouping,
+    //       attributes: ["id", "name"],
+    //       required: false,
+    //     },
+    //     {
+    //       model: Country,
+    //       attributes: ["id", "name"],
+    //       required: false,
+    //     },
+    //     {
+    //       model: Whois,
+    //       attributes: ["value"],
+    //       include: [
+    //         {
+    //           model: WhoisKey,
+    //           attributes: ["key_name"],
+    //           required: false,
+    //         },
+    //       ],
+    //       required: false,
+    //     },
+    //   ],
+    //   where: { id: finalHostIds },
+    //   order: [
+    //     ["priority_id", "DESC"],
+    //     ["updated_at", "DESC"],
+    //   ],
+    // });
+
+    /*********************************** */
+
+    const hosts = await sequelize.query(`
+      SELECT
+        h.id,
+        h.ip,
+        h.reachable,
+        h.updated_at,
+        h.priority_id,
+        h.grouping_id,
+        h.country_id,
+
+        -- Данные о приоритете
+        p.id as "priority.id",
+        p.name as "priority.name",
+
+        -- Данные о группировке
+        g.id as "grouping.id",
+        g.name as "grouping.name",
+
+        -- Данные о стране
+        c.id as "country.id",
+        c.name as "country.name"
+
+      FROM hosts h
+
+      -- LEFT JOIN для приоритета
+      LEFT JOIN host_priorities p ON h.priority_id = p.id
+
+      -- LEFT JOIN для группировки
+      LEFT JOIN host_groupings g ON h.grouping_id = g.id
+
+      -- LEFT JOIN для страны
+      LEFT JOIN countries c ON h.country_id = c.id
+
+      WHERE h.id IN (:finalHostIds)
+
+      ORDER BY
+        h.priority_id DESC NULLS LAST,
+        h.updated_at DESC
+    `, {
+      replacements: { finalHostIds },
+      type: sequelize.QueryTypes.SELECT,
+      nest: true,
     });
+
+    // Затем отдельно получаем связанные данные
+    if (hosts.length > 0) {
+      const hostIds = hosts.map(h => h.id);
+
+      // Получаем порты с well_known_ports - ИСПРАВЛЕННЫЙ ЗАПРОС
+      const ports = await sequelize.query(`
+        SELECT
+          p.host_id,
+          p.port,
+          p.type,
+          wkp.name as well_known_port_name
+        FROM ports p
+        LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+        WHERE p.host_id IN (:hostIds)
+      `, {
+        replacements: { hostIds },
+        type: sequelize.QueryTypes.SELECT,
+        nest: false,  // Используем false для плоской структуры
+      });
+
+      // console.log('ports >>> ', ports)
+
+      // Получаем WHOIS данные
+      const whoisData = await sequelize.query(`
+        SELECT
+          w.host_id,
+          w.value,
+          wk.key_name as "WhoisKey.key_name"
+        FROM whois w
+        LEFT JOIN whois_keys wk ON w.key_id = wk.id
+        WHERE w.host_id IN (:hostIds)
+      `, {
+        replacements: { hostIds },
+        type: sequelize.QueryTypes.SELECT,
+        nest: true,
+      });
+
+      // Группируем данные по host_id
+      const portsByHost = {};
+      ports.forEach(port => {
+        if (!portsByHost[port.host_id]) {
+          portsByHost[port.host_id] = [];
+        }
+
+        // Получаем имя порта из well_known_port_name
+        const portName = port.well_known_port_name || null;
+
+        portsByHost[port.host_id].push({
+          port: port.port,
+          type: port.type,
+          name: portName  // Простое поле name с именем порта
+        });
+      });
+      // console.log('portsByHost >>> ', portsByHost)
+
+      const whoisByHost = {};
+      whoisData.forEach(whois => {
+        if (!whoisByHost[whois.host_id]) {
+          whoisByHost[whois.host_id] = [];
+        }
+        whoisByHost[whois.host_id].push({
+          value: whois.value,
+          WhoisKey: whois['WhoisKey.key_name'] ? { key_name: whois['WhoisKey.key_name'] } : null
+        });
+      });
+
+      // Объединяем все данные
+      hosts.forEach(host => {
+        // Получаем все порты для хоста
+        const allPorts = portsByHost[host.id] || [];
+
+        // Разделяем порты по типам
+        const openPorts = allPorts.filter(p => p.type === 'open')
+          .map(p => ({ port: p.port, name: p.name }));
+
+        const filteredPorts = allPorts.filter(p => p.type === 'filtered')
+          .map(p => ({ port: p.port, name: p.name }));
+
+        // Сохраняем оригинальную структуру
+        host.Ports = allPorts;
+        host.Whois = whoisByHost[host.id] || [];
+
+        // Добавляем структурированные данные для вывода
+        host.port_data = {
+          open: openPorts,
+          filtered: filteredPorts
+        };
+      });
+    }
+    /*********************************** */
+
+    // console.log("hosts >>> ", hosts[34]);
 
     // Форматируем данные хостов
     const formattedHosts = hosts.map(formatHostData);
@@ -635,7 +779,7 @@ export const getGrouping = async (req, res) => {
     const paginatedGroups = groupedData.slice(offset, offset + limitNum);
 
     return res.json({
-      items: paginatedGroups,
+      items: groupedData,//paginatedGroups, @TODO IP fix
       pagination: {
         currentPage: pageNum,
         totalPages: totalPages,
@@ -851,175 +995,289 @@ async function groupByCountry(hosts) {
     }));
 }
 
-// Группировка по ключевым словам
+// Группировка по ключевым словам оптимизированный
 async function groupByKeywords(hosts) {
   try {
-    // Получаем ID всех отфильтрованных хостов
-    const hostIds = hosts.map((host) => host.id);
-
-    if (!hostIds.length) {
+    if (!hosts || hosts.length === 0) {
       return [];
     }
 
-    // Используем raw SQL для получения уникальных ключевых слов с подсчетом хостов
-    const uniqueKeywordsSql = `
-      SELECT DISTINCT wk.key_name, COUNT(DISTINCT w.host_id) as count
-      FROM whois_keys wk
-      INNER JOIN whois w ON wk.id = w.key_id
-      WHERE w.host_id IN (:hostIds)
-      GROUP BY wk.key_name
-      ORDER BY wk.key_name ASC
+    // Создаем Map для быстрого поиска хостов по ID
+    const hostsMap = new Map();
+    hosts.forEach(host => {
+      hostsMap.set(host.id, host);
+    });
+
+    // Получаем ID всех отфильтрованных хостов
+    const hostIds = hosts.map(host => host.id);
+
+    // Используем один SQL запрос для получения всех необходимых данных
+    const keywordDataSql = `
+      WITH host_keywords AS (
+        SELECT 
+          w.host_id,
+          wk.key_name,
+          COUNT(*) OVER (PARTITION BY wk.key_name) as total_count
+        FROM whois w
+        INNER JOIN whois_keys wk ON w.key_id = wk.id
+        WHERE w.host_id IN (:hostIds)
+        GROUP BY w.host_id, wk.key_name
+        ORDER BY wk.key_name ASC
+      )
+      SELECT 
+        key_name,
+        total_count,
+        ARRAY_AGG(host_id) as host_ids
+      FROM host_keywords
+      GROUP BY key_name, total_count
+      ORDER BY key_name ASC
     `;
 
-    const uniqueKeywordsResult = await sequelize.query(uniqueKeywordsSql, {
+    const keywordGroupsResult = await sequelize.query(keywordDataSql, {
       replacements: { hostIds },
       type: sequelize.QueryTypes.SELECT,
     });
 
-    // Получаем полные WHOIS данные для хостов с группировкой по ключевым словам
-    const hostsWithWhois = await Host.findAll({
-      include: [
-        {
-          model: Port,
-          attributes: ["port", "type"],
-          include: [
-            {
-              model: WellKnownPort,
-              attributes: ["name"],
-              required: false,
-            },
-          ],
-        },
-        {
-          model: Priority,
-          attributes: ["id", "name"],
-          required: false,
-        },
-        {
-          model: Grouping,
-          attributes: ["id", "name"],
-          required: false,
-        },
-        {
-          model: Country,
-          attributes: ["id", "name"],
-          required: false,
-        },
-        {
-          model: Whois,
-          attributes: ["value"],
-          include: [
-            {
-              model: WhoisKey,
-              attributes: ["key_name"],
-              required: false,
-            },
-          ],
-          required: false,
-        },
-      ],
-      where: {
-        id: { [Op.in]: hostIds },
-      },
-      order: [
-        ["priority_id", "DESC"],
-        ["updated_at", "DESC"],
-      ],
-    });
-
-    // Форматируем данные хостов (используем ту же функцию formatHostData)
-    const formattedHostsMap = new Map();
-    hostsWithWhois.forEach((host) => {
-      if (!formattedHostsMap.has(host.id)) {
-        formattedHostsMap.set(host.id, formatHostData(host));
-      }
-    });
-
-    // Инициализируем группы для всех уникальных ключевых слов
-    const keywordGroups = {};
-
-    uniqueKeywordsResult.forEach((row) => {
-      const keyword = row.key_name;
-      const count = parseInt(row.count);
-      keywordGroups[keyword] = {
-        keyword: keyword,
-        count: count,
-        items: [],
-      };
-    });
-
-    // Группируем хосты по ключевым словам через WHOIS данные
-    for (const host of hostsWithWhois) {
-      const formattedHost = formattedHostsMap.get(host.id);
-      const hostWhois = host.Whois || [];
-
-      if (formattedHost && hostWhois.length > 0) {
-        for (const whois of hostWhois) {
-          const keyName = whois.WhoisKey?.key_name;
-
-          if (keyName && keywordGroups[keyName]) {
-            // Проверяем, что хост еще не добавлен в эту группу
-            const hostExists = keywordGroups[keyName].items.some(
-              (item) => item.id === formattedHost.id
-            );
-
-            if (!hostExists) {
-              keywordGroups[keyName].items.push(formattedHost);
-            }
-          }
-        }
-      }
+    // Если нет данных WHOIS, возвращаем пустой массив
+    if (!keywordGroupsResult.length) {
+      return [];
     }
 
-    // Сортируем хосты внутри каждой группы по приоритету и дате
-    Object.values(keywordGroups).forEach((group) => {
-      group.items.sort((a, b) => {
-        // Сначала сортируем по приоритету (DESC)
+    // Собираем группы
+    const groups = keywordGroupsResult.map(row => {
+      const keyword = row.key_name;
+      const totalCount = parseInt(row.total_count);
+      const hostIdArray = row.host_ids || [];
+      
+      // Получаем хосты для этой группы (первые 10)
+      const groupHosts = [];
+      const addedHostIds = new Set();
+      
+      for (const hostId of hostIdArray) {
+        if (groupHosts.length >= 10) break;
+        
+        const host = hostsMap.get(hostId);
+        if (host && !addedHostIds.has(hostId)) {
+          groupHosts.push(host);
+          addedHostIds.add(hostId);
+        }
+      }
+      
+      // Сортируем хосты внутри группы по приоритету и дате
+      groupHosts.sort((a, b) => {
         const priorityA = a.priority_info?.priority?.id || 0;
         const priorityB = b.priority_info?.priority?.id || 0;
-
+        
         if (priorityB !== priorityA) {
           return priorityB - priorityA;
         }
-
-        // Если приоритеты одинаковые, сортируем по дате обновления
+        
         if (a.updated_at && b.updated_at) {
           return new Date(b.updated_at) - new Date(a.updated_at);
         }
-
+        
         return 0;
       });
+
+      const totalItemsInGroup = Math.min(totalCount, hostIdArray.length);
+      const totalPagesInGroup = Math.ceil(totalItemsInGroup / 10);
+
+      return {
+        keyword: keyword,
+        name: keyword,
+        count: totalCount,
+        items: groupHosts,
+        pagination: {
+          currentPage: 1,
+          totalPages: totalPagesInGroup,
+          totalItems: totalItemsInGroup,
+          hasNext: totalItemsInGroup > 10,
+          hasPrev: false,
+        },
+      };
     });
 
-    // Преобразуем в нужный формат и сортируем по возрастанию ключевых слов
-    const groups = Object.values(keywordGroups)
-      .filter((group) => group.items.length > 0)
-      .map((group) => {
-        const totalItemsInGroup = group.items.length;
-        const totalPagesInGroup = Math.ceil(totalItemsInGroup / 10); // 10 хостов на страницу внутри группы
+    // Фильтруем пустые группы и возвращаем результат
+    return groups.filter(group => group.items.length > 0);
 
-        return {
-          keyword: group.keyword,
-          count: group.count,
-          name: group.keyword, // Добавляем name для совместимости
-          items: group.items.slice(0, 10), // Первые 10 хостов для отображения
-          pagination: {
-            currentPage: 1,
-            totalPages: totalPagesInGroup,
-            totalItems: totalItemsInGroup,
-            hasNext: totalItemsInGroup > 10,
-            hasPrev: false,
-          },
-        };
-      })
-      .sort((a, b) => a.keyword.localeCompare(b.keyword));
-
-    return groups;
   } catch (error) {
     console.error("Ошибка в groupByKeywords:", error);
     return [];
   }
 }
+
+// старый рабочий
+//// Группировка по ключевым словам
+// async function groupByKeywords(hosts) {
+//   try {
+//     // Получаем ID всех отфильтрованных хостов
+//     const hostIds = hosts.map((host) => host.id);
+
+//     if (!hostIds.length) {
+//       return [];
+//     }
+
+//     // Используем raw SQL для получения уникальных ключевых слов с подсчетом хостов
+//     const uniqueKeywordsSql = `
+//       SELECT DISTINCT wk.key_name, COUNT(DISTINCT w.host_id) as count
+//       FROM whois_keys wk
+//       INNER JOIN whois w ON wk.id = w.key_id
+//       WHERE w.host_id IN (:hostIds)
+//       GROUP BY wk.key_name
+//       ORDER BY wk.key_name ASC
+//     `;
+
+//     const uniqueKeywordsResult = await sequelize.query(uniqueKeywordsSql, {
+//       replacements: { hostIds },
+//       type: sequelize.QueryTypes.SELECT,
+//     });
+
+//     // Получаем полные WHOIS данные для хостов с группировкой по ключевым словам
+//     const hostsWithWhois = await Host.findAll({
+//       include: [
+//         {
+//           model: Port,
+//           attributes: ["port", "type"],
+//           include: [
+//             {
+//               model: WellKnownPort,
+//               attributes: ["name"],
+//               required: false,
+//             },
+//           ],
+//         },
+//         {
+//           model: Priority,
+//           attributes: ["id", "name"],
+//           required: false,
+//         },
+//         {
+//           model: Grouping,
+//           attributes: ["id", "name"],
+//           required: false,
+//         },
+//         {
+//           model: Country,
+//           attributes: ["id", "name"],
+//           required: false,
+//         },
+//         {
+//           model: Whois,
+//           attributes: ["value"],
+//           include: [
+//             {
+//               model: WhoisKey,
+//               attributes: ["key_name"],
+//               required: false,
+//             },
+//           ],
+//           required: false,
+//         },
+//       ],
+//       where: {
+//         id: { [Op.in]: hostIds },
+//       },
+//       order: [
+//         ["priority_id", "DESC"],
+//         ["updated_at", "DESC"],
+//       ],
+//     });
+
+//     // Форматируем данные хостов (используем ту же функцию formatHostData)
+//     const formattedHostsMap = new Map();
+//     hostsWithWhois.forEach((host) => {
+//       if (!formattedHostsMap.has(host.id)) {
+//         formattedHostsMap.set(host.id, formatHostData(host));
+//       }
+//     });
+
+//     // Инициализируем группы для всех уникальных ключевых слов
+//     const keywordGroups = {};
+
+//     uniqueKeywordsResult.forEach((row) => {
+//       const keyword = row.key_name;
+//       const count = parseInt(row.count);
+//       keywordGroups[keyword] = {
+//         keyword: keyword,
+//         count: count,
+//         items: [],
+//       };
+//     });
+
+//     // Группируем хосты по ключевым словам через WHOIS данные
+//     for (const host of hostsWithWhois) {
+//       const formattedHost = formattedHostsMap.get(host.id);
+//       const hostWhois = host.Whois || [];
+      
+//       if (formattedHost && hostWhois.length > 0) {
+//         for (const whois of hostWhois) {
+//           const keyName = whois.WhoisKey?.key_name;
+
+//           if (keyName && keywordGroups[keyName]) {
+//             // Проверяем, что хост еще не добавлен в эту группу
+//             const hostExists = keywordGroups[keyName].items.some(
+//               (item) => item.id === formattedHost.id
+//             );
+
+//             if (!hostExists) {
+//               keywordGroups[keyName].items.push(formattedHost);
+//             }
+//           }
+//         }
+//       }
+//     }
+
+//     // Сортируем хосты внутри каждой группы по приоритету и дате
+//     Object.values(keywordGroups).forEach((group) => {
+//       group.items.sort((a, b) => {
+//         // Сначала сортируем по приоритету (DESC)
+//         const priorityA = a.priority_info?.priority?.id || 0;
+//         const priorityB = b.priority_info?.priority?.id || 0;
+
+//         if (priorityB !== priorityA) {
+//           return priorityB - priorityA;
+//         }
+
+//         // Если приоритеты одинаковые, сортируем по дате обновления
+//         if (a.updated_at && b.updated_at) {
+//           return new Date(b.updated_at) - new Date(a.updated_at);
+//         }
+
+//         return 0;
+//       });
+//     });
+
+//     // Преобразуем в нужный формат и сортируем по возрастанию ключевых слов
+//     const groups = Object.values(keywordGroups)
+//       .filter((group) => group.items.length > 0)
+//       .map((group) => {
+//         const totalItemsInGroup = group.items.length;
+//         const totalPagesInGroup = Math.ceil(totalItemsInGroup / 10); // 10 хостов на страницу внутри группы
+
+//         return {
+//           keyword: group.keyword,
+//           count: group.count,
+//           name: group.keyword, // Добавляем name для совместимости
+//           items: group.items.slice(0, 10), // Первые 10 хостов для отображения
+//           pagination: {
+//             currentPage: 1,
+//             totalPages: totalPagesInGroup,
+//             totalItems: totalItemsInGroup,
+//             hasNext: totalItemsInGroup > 10,
+//             hasPrev: false,
+//           },
+//         };
+//       })
+//       .sort((a, b) => a.keyword.localeCompare(b.keyword));
+
+//     return groups;
+//   } catch (error) {
+//     console.error("Ошибка в groupByKeywords:", error);
+//     return [];
+//   }
+// }
+
+
 
 // Группировка по наличию WHOIS
 async function groupByWhois(hosts) {
@@ -1061,342 +1319,9 @@ async function groupByWhois(hosts) {
   return groups;
 }
 
-// // Функция для получения данных по группе с пагинацией
-// export const getGroupDetails = async (req, res) => {
-//   const { group, page = 1, limit = 10 } = req.query;
-//   const pageNum = Math.max(1, parseInt(page) || 1);
-//   const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
-//   const offset = (pageNum - 1) * limitNum;
-
-//   try {
-//     // Ищем группу по имени
-//     const groupData = await Grouping.findOne({
-//       where: { name: group },
-//       attributes: ["id", "name"],
-//       raw: true,
-//     });
-
-//     if (!groupData) {
-//       return res.status(404).json({ error: "Группа не найдена" });
-//     }
-
-//     // Получаем хосты для этой группы с пагинацией
-//     const hosts = await Host.findAll({
-//       include: [
-//         {
-//           model: Port,
-//           attributes: ["port", "type"],
-//           include: [
-//             {
-//               model: WellKnownPort,
-//               attributes: ["name"],
-//               required: false,
-//             },
-//           ],
-//         },
-//         {
-//           model: Priority,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Country,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Whois,
-//           attributes: ["value"],
-//           include: [
-//             {
-//               model: WhoisKey,
-//               attributes: ["key_name"],
-//               required: false,
-//             },
-//           ],
-//           required: false,
-//         },
-//       ],
-//       where: {
-//         grouping_id: groupData.id,
-//       },
-//       order: [
-//         ["priority_id", "DESC"],
-//         ["updated_at", "DESC"],
-//       ],
-//       limit: limitNum,
-//       offset: offset,
-//     });
-
-//     const formattedHosts = hosts.map(formatHostData);
-//     const totalItems = await Host.count({
-//       where: {
-//         grouping_id: groupData.id,
-//       },
-//     });
-
-//     const totalPages = Math.ceil(totalItems / limitNum);
-
-//     return res.json({
-//       items: [
-//         {
-//           name: groupData.name,
-//           items: formattedHosts,
-//           pagination: {
-//             currentPage: pageNum,
-//             totalPages: totalPages,
-//             totalItems: totalItems,
-//             hasNext: pageNum < totalPages,
-//             hasPrev: pageNum > 1,
-//           },
-//         },
-//       ],
-//       pagination: {
-//         currentPage: pageNum,
-//         totalPages: 1,
-//         totalItems: 1,
-//         hasNext: false,
-//         hasPrev: false,
-//       },
-//       field: "groups",
-//       type: "group",
-//     });
-//   } catch (error) {
-//     console.error("Ошибка в getGroupDetails:", error);
-//     return res.status(500).json({ error: "Внутренняя ошибка сервера" });
-//   }
-// };
-
-// // Функция для получения данных по стране с пагинацией
-// export const getCountryDetails = async (req, res) => {
-//   const { country, page = 1, limit = 10 } = req.query;
-//   const pageNum = Math.max(1, parseInt(page) || 1);
-//   const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
-//   const offset = (pageNum - 1) * limitNum;
-
-//   try {
-//     // Ищем страну по имени
-//     const countryData = await Country.findOne({
-//       where: { name: country },
-//       attributes: ["id", "name"],
-//       raw: true,
-//     });
-
-//     if (!countryData) {
-//       return res.status(404).json({ error: "Страна не найдена" });
-//     }
-
-//     // Получаем хосты для этой страны с пагинацией
-//     const hosts = await Host.findAll({
-//       include: [
-//         {
-//           model: Port,
-//           attributes: ["port", "type"],
-//           include: [
-//             {
-//               model: WellKnownPort,
-//               attributes: ["name"],
-//               required: false,
-//             },
-//           ],
-//         },
-//         {
-//           model: Priority,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Grouping,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Whois,
-//           attributes: ["value"],
-//           include: [
-//             {
-//               model: WhoisKey,
-//               attributes: ["key_name"],
-//               required: false,
-//             },
-//           ],
-//           required: false,
-//         },
-//       ],
-//       where: {
-//         country_id: countryData.id,
-//       },
-//       order: [
-//         ["priority_id", "DESC"],
-//         ["updated_at", "DESC"],
-//       ],
-//       limit: limitNum,
-//       offset: offset,
-//     });
-
-//     const formattedHosts = hosts.map(formatHostData);
-//     const totalItems = await Host.count({
-//       where: {
-//         country_id: countryData.id,
-//       },
-//     });
-
-//     const totalPages = Math.ceil(totalItems / limitNum);
-
-//     return res.json({
-//       items: [
-//         {
-//           name: countryData.name,
-//           items: formattedHosts,
-//           pagination: {
-//             currentPage: pageNum,
-//             totalPages: totalPages,
-//             totalItems: totalItems,
-//             hasNext: pageNum < totalPages,
-//             hasPrev: pageNum > 1,
-//           },
-//         },
-//       ],
-//       pagination: {
-//         currentPage: pageNum,
-//         totalPages: 1,
-//         totalItems: 1,
-//         hasNext: false,
-//         hasPrev: false,
-//       },
-//       field: "countries",
-//       type: "country",
-//     });
-//   } catch (error) {
-//     console.error("Ошибка в getCountryDetails:", error);
-//     return res.status(500).json({ error: "Внутренняя ошибка сервера" });
-//   }
-// };
-
-// // Функция для получения данных по приоритету с пагинацией
-// export const getPriorityDetails = async (req, res) => {
-//   const { priority, page = 1, limit = 10 } = req.query;
-//   const pageNum = Math.max(1, parseInt(page) || 1);
-//   const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
-//   const offset = (pageNum - 1) * limitNum;
-
-//   try {
-//     // Ищем приоритет по имени
-//     const priorityData = await Priority.findOne({
-//       where: { name: priority },
-//       attributes: ["id", "name"],
-//       raw: true,
-//     });
-
-//     if (!priorityData) {
-//       return res.status(404).json({ error: "Приоритет не найден" });
-//     }
-
-//     // Получаем хосты для этого приоритета с пагинацией
-//     const hosts = await Host.findAll({
-//       include: [
-//         {
-//           model: Port,
-//           attributes: ["port", "type"],
-//           include: [
-//             {
-//               model: WellKnownPort,
-//               attributes: ["name"],
-//               required: false,
-//             },
-//           ],
-//         },
-//         {
-//           model: Grouping,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Country,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Whois,
-//           attributes: ["value"],
-//           include: [
-//             {
-//               model: WhoisKey,
-//               attributes: ["key_name"],
-//               required: false,
-//             },
-//           ],
-//           required: false,
-//         },
-//       ],
-//       where: {
-//         priority_id: priorityData.id,
-//       },
-//       order: [
-//         ["priority_id", "DESC"],
-//         ["updated_at", "DESC"],
-//       ],
-//       limit: limitNum,
-//       offset: offset,
-//     });
-
-//     const formattedHosts = hosts.map(formatHostData);
-//     const totalItems = await Host.count({
-//       where: {
-//         priority_id: priorityData.id,
-//       },
-//     });
-
-//     const totalPages = Math.ceil(totalItems / limitNum);
-
-//     return res.json({
-//       items: [
-//         {
-//           name: priorityData.name,
-//           items: formattedHosts,
-//           pagination: {
-//             currentPage: pageNum,
-//             totalPages: totalPages,
-//             totalItems: totalItems,
-//             hasNext: pageNum < totalPages,
-//             hasPrev: pageNum > 1,
-//           },
-//         },
-//       ],
-//       pagination: {
-//         currentPage: pageNum,
-//         totalPages: 1,
-//         totalItems: 1,
-//         hasNext: false,
-//         hasPrev: false,
-//       },
-//       field: "priorities",
-//       type: "priority",
-//     });
-//   } catch (error) {
-//     console.error("Ошибка в getPriorityDetails:", error);
-//     return res.status(500).json({ error: "Внутренняя ошибка сервера" });
-//   }
-// };
-
-// Функция для получения данных по группе с пагинацией и фильтрами
+// Функция для получения данных по группе с пагинацией
 export const getGroupDetails = async (req, res) => {
-  const { 
-    group, 
-    page = 1, 
-    limit = 10,
-    // Параметры фильтров из запроса
-    ip,
-    portOpened,
-    portFiltered,
-    keyword,
-    priority,
-    country: countryFilter,
-    whois,
-    startDate,
-    endDate
-  } = req.query;
-
+  const { group, page = 1, limit = 10 } = req.query;
   const pageNum = Math.max(1, parseInt(page) || 1);
   const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
   const offset = (pageNum - 1) * limitNum;
@@ -1413,72 +1338,8 @@ export const getGroupDetails = async (req, res) => {
       return res.status(404).json({ error: "Группа не найдена" });
     }
 
-    // Собираем базовые условия WHERE
-    const whereConditions = {
-      grouping_id: groupData.id,
-    };
-
-    // 1. Собираем все фильтры в один объект условий
-    const filterConditions = {};
-
-    // Фильтр по IP
-    if (ip) {
-      filterConditions.ip = {
-        [Op.iLike]: `${ip}%`
-      };
-    }
-
-    // Фильтр по дате
-    if (startDate || endDate) {
-      const dateWhere = {};
-      if (startDate) dateWhere[Op.gte] = new Date(startDate);
-      if (endDate) dateWhere[Op.lte] = new Date(endDate);
-      filterConditions.updated_at = dateWhere;
-    }
-
-    // Фильтр по приоритету
-    if (priority) {
-      const priorityNames = extractValues(priority);
-      const priorityIds = await getPriorityIdsFromNames(priorityNames);
-      if (priorityIds.length > 0) {
-        filterConditions.priority_id = priorityIds;
-      }
-    }
-
-    // Фильтр по стране
-    if (countryFilter) {
-      const countryNames = extractValues(countryFilter);
-      const countryIds = await getCountryIdsFromNames(countryNames);
-      if (countryIds.length > 0) {
-        filterConditions.country_id = countryIds;
-      }
-    }
-
-    // Фильтр по наличию WHOIS
-    let includeWhoisOptions = null;
-    if (whois === 'withWhois' || whois === 'noWhois') {
-      includeWhoisOptions = {
-        model: Whois,
-        attributes: ["value"],
-        include: [
-          {
-            model: WhoisKey,
-            attributes: ["key_name"],
-            required: false,
-          },
-        ],
-        required: whois === 'withWhois', // true для withWhois, false для noWhois
-      };
-    }
-
-    // Собираем все условия WHERE
-    const finalWhere = {
-      ...whereConditions,
-      ...filterConditions
-    };
-
-    // 2. Создаем базовый объект запроса
-    const queryOptions = {
+    // Получаем хосты для этой группы с пагинацией
+    const hosts = await Host.findAll({
       include: [
         {
           model: Port,
@@ -1501,190 +1362,61 @@ export const getGroupDetails = async (req, res) => {
           attributes: ["id", "name"],
           required: false,
         },
+        {
+          model: Whois,
+          attributes: ["value"],
+          include: [
+            {
+              model: WhoisKey,
+              attributes: ["key_name"],
+              required: false,
+            },
+          ],
+          required: false,
+        },
       ],
-      where: finalWhere,
+      where: {
+        grouping_id: groupData.id,
+      },
       order: [
         ["priority_id", "DESC"],
         ["updated_at", "DESC"],
       ],
       limit: limitNum,
       offset: offset,
-    };
-
-    // 3. Добавляем WHOIS в зависимости от фильтра
-    if (includeWhoisOptions) {
-      queryOptions.include.push(includeWhoisOptions);
-    } else {
-      queryOptions.include.push({
-        model: Whois,
-        attributes: ["value"],
-        include: [
-          {
-            model: WhoisKey,
-            attributes: ["key_name"],
-            required: false,
-          },
-        ],
-        required: false,
-      });
-    }
-
-    // 4. Получаем хосты с учетом всех фильтров
-    const hosts = await Host.findAll(queryOptions);
-
-    // 5. Дополнительная фильтрация по портам (если указаны)
-    let filteredHosts = hosts;
-    if (portOpened || portFiltered) {
-      const openedPorts = parsePortsString(portOpened);
-      const filteredPorts = parsePortsString(portFiltered);
-      
-      filteredHosts = hosts.filter(host => {
-        const hostPorts = host.Ports || [];
-        
-        let hasOpenedPort = openedPorts.length === 0;
-        let hasFilteredPort = filteredPorts.length === 0;
-        
-        if (openedPorts.length > 0) {
-          hasOpenedPort = hostPorts.some(port => 
-            port.type === 'open' && openedPorts.includes(port.port)
-          );
-        }
-        
-        if (filteredPorts.length > 0) {
-          hasFilteredPort = hostPorts.some(port => 
-            port.type === 'filtered' && filteredPorts.includes(port.port)
-          );
-        }
-        
-        return hasOpenedPort && hasFilteredPort;
-      });
-    }
-
-    // 6. Дополнительная фильтрация по ключевым словам
-    if (keyword) {
-      const keywords = extractValues(keyword);
-      if (keywords.length > 0) {
-        filteredHosts = filteredHosts.filter(host => {
-          const whoisData = host.Whois || [];
-          return whoisData.some(w => {
-            const valueMatch = keywords.some(kw => 
-              w.value && w.value.toLowerCase().includes(kw.toLowerCase())
-            );
-            const keyMatch = keywords.some(kw => 
-              w.WhoisKey && w.WhoisKey.key_name && 
-              w.WhoisKey.key_name.toLowerCase().includes(kw.toLowerCase())
-            );
-            return valueMatch || keyMatch;
-          });
-        });
-      }
-    }
-
-    // Форматируем хосты
-    const formattedHosts = filteredHosts.map(formatHostData);
-
-    // 7. Получаем общее количество с учетом всех фильтров
-    // Для этого нужен отдельный запрос с теми же условиями
-    const countQueryOptions = {
-      where: finalWhere,
-      include: [],
-    };
-
-    // Добавляем условия для WHOIS если нужно
-    if (whois === 'withWhois') {
-      countQueryOptions.include.push({
-        model: Whois,
-        required: true,
-      });
-    } else if (whois === 'noWhois') {
-      countQueryOptions.include.push({
-        model: Whois,
-        required: false,
-      });
-      // Для подсчета без WHOIS используем подзапрос
-      countQueryOptions.where['$Whois.id$'] = null;
-    }
-
-    // Используем более простой подход: считаем из отфильтрованного результата
-    // Для точного подсчета нужно сделать полный запрос без пагинации
-    const totalHostsQuery = await Host.findAll({
-      ...queryOptions,
-      limit: null,
-      offset: 0,
     });
 
-    // Применяем дополнительные фильтры в памяти (для портов и ключевых слов)
-    let totalFilteredHosts = totalHostsQuery;
-    
-    if (portOpened || portFiltered) {
-      const openedPorts = parsePortsString(portOpened);
-      const filteredPorts = parsePortsString(portFiltered);
-      
-      totalFilteredHosts = totalHostsQuery.filter(host => {
-        const hostPorts = host.Ports || [];
-        
-        let hasOpenedPort = openedPorts.length === 0;
-        let hasFilteredPort = filteredPorts.length === 0;
-        
-        if (openedPorts.length > 0) {
-          hasOpenedPort = hostPorts.some(port => 
-            port.type === 'open' && openedPorts.includes(port.port)
-          );
-        }
-        
-        if (filteredPorts.length > 0) {
-          hasFilteredPort = hostPorts.some(port => 
-            port.type === 'filtered' && filteredPorts.includes(port.port)
-          );
-        }
-        
-        return hasOpenedPort && hasFilteredPort;
-      });
-    }
-    
-    if (keyword) {
-      const keywords = extractValues(keyword);
-      if (keywords.length > 0) {
-        totalFilteredHosts = totalFilteredHosts.filter(host => {
-          const whoisData = host.Whois || [];
-          return whoisData.some(w => {
-            const valueMatch = keywords.some(kw => 
-              w.value && w.value.toLowerCase().includes(kw.toLowerCase())
-            );
-            const keyMatch = keywords.some(kw => 
-              w.WhoisKey && w.WhoisKey.key_name && 
-              w.WhoisKey.key_name.toLowerCase().includes(kw.toLowerCase())
-            );
-            return valueMatch || keyMatch;
-          });
-        });
-      }
-    }
+    const formattedHosts = hosts.map(formatHostData);
+    const totalItems = await Host.count({
+      where: {
+        grouping_id: groupData.id,
+      },
+    });
 
-    const totalItems = totalFilteredHosts.length;
     const totalPages = Math.ceil(totalItems / limitNum);
 
     return res.json({
-      items: [
-        {
-          name: groupData.name,
-          items: formattedHosts,
-          pagination: {
-            currentPage: pageNum,
-            totalPages: totalPages,
-            totalItems: totalItems,
-            hasNext: pageNum < totalPages,
-            hasPrev: pageNum > 1,
-          },
+      items: {
+        items: formattedHosts,
+        name: groupData.name,
+        pagination: {
+          currentPage: pageNum,
+
+          totalPages: totalPages,
+          totalItems: totalItems,
+          hasNext: pageNum < totalPages,
+          hasPrev: pageNum > 1,
         },
-      ],
+      },
+
       pagination: {
         currentPage: pageNum,
-        totalPages: 1,
-        totalItems: 1,
-        hasNext: false,
-        hasPrev: false,
+        totalPages: totalPages,
+        totalItems: totalItems,
+        hasNext: pageNum < totalPages,
+        hasPrev: pageNum > 1,
       },
+
       field: "groups",
       type: "group",
     });
@@ -1694,24 +1426,9 @@ export const getGroupDetails = async (req, res) => {
   }
 };
 
-// Функция для получения данных по стране с пагинацией и фильтрами
+// Функция для получения данных по стране с пагинацией
 export const getCountryDetails = async (req, res) => {
-  const { 
-    country, 
-    page = 1, 
-    limit = 10,
-    // Параметры фильтров
-    ip,
-    portOpened,
-    portFiltered,
-    keyword,
-    priority,
-    group: groupFilter,
-    whois,
-    startDate,
-    endDate
-  } = req.query;
-
+  const { country, page = 1, limit = 10 } = req.query;
   const pageNum = Math.max(1, parseInt(page) || 1);
   const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
   const offset = (pageNum - 1) * limitNum;
@@ -1728,72 +1445,8 @@ export const getCountryDetails = async (req, res) => {
       return res.status(404).json({ error: "Страна не найдена" });
     }
 
-    // Собираем базовые условия WHERE
-    const whereConditions = {
-      country_id: countryData.id,
-    };
-
-    // Собираем все фильтры
-    const filterConditions = {};
-
-    // Фильтр по IP
-    if (ip) {
-      filterConditions.ip = {
-        [Op.iLike]: `${ip}%`
-      };
-    }
-
-    // Фильтр по дате
-    if (startDate || endDate) {
-      const dateWhere = {};
-      if (startDate) dateWhere[Op.gte] = new Date(startDate);
-      if (endDate) dateWhere[Op.lte] = new Date(endDate);
-      filterConditions.updated_at = dateWhere;
-    }
-
-    // Фильтр по приоритету
-    if (priority) {
-      const priorityNames = extractValues(priority);
-      const priorityIds = await getPriorityIdsFromNames(priorityNames);
-      if (priorityIds.length > 0) {
-        filterConditions.priority_id = priorityIds;
-      }
-    }
-
-    // Фильтр по группе
-    if (groupFilter) {
-      const groupNames = extractValues(groupFilter);
-      const groupIds = await getGroupIdsFromNames(groupNames);
-      if (groupIds.length > 0) {
-        filterConditions.grouping_id = groupIds;
-      }
-    }
-
-    // Фильтр по наличию WHOIS
-    let includeWhoisOptions = null;
-    if (whois === 'withWhois' || whois === 'noWhois') {
-      includeWhoisOptions = {
-        model: Whois,
-        attributes: ["value"],
-        include: [
-          {
-            model: WhoisKey,
-            attributes: ["key_name"],
-            required: false,
-          },
-        ],
-        required: whois === 'withWhois',
-      };
-    }
-
-    // Собираем все условия
-    const finalWhere = {
-      ...whereConditions,
-      ...filterConditions
-    };
-
-    // Создаем запрос
-    const queryOptions = {
+    // Получаем хосты для этой страны с пагинацией
+    const hosts = await Host.findAll({
       include: [
         {
           model: Port,
@@ -1816,169 +1469,49 @@ export const getCountryDetails = async (req, res) => {
           attributes: ["id", "name"],
           required: false,
         },
+        {
+          model: Whois,
+          attributes: ["value"],
+          include: [
+            {
+              model: WhoisKey,
+              attributes: ["key_name"],
+              required: false,
+            },
+          ],
+          required: false,
+        },
       ],
-      where: finalWhere,
+      where: {
+        country_id: countryData.id,
+      },
       order: [
         ["priority_id", "DESC"],
         ["updated_at", "DESC"],
       ],
       limit: limitNum,
       offset: offset,
-    };
-
-    // Добавляем WHOIS
-    if (includeWhoisOptions) {
-      queryOptions.include.push(includeWhoisOptions);
-    } else {
-      queryOptions.include.push({
-        model: Whois,
-        attributes: ["value"],
-        include: [
-          {
-            model: WhoisKey,
-            attributes: ["key_name"],
-            required: false,
-          },
-        ],
-        required: false,
-      });
-    }
-
-    // Получаем хосты
-    const hosts = await Host.findAll(queryOptions);
-
-    // Дополнительная фильтрация
-    let filteredHosts = hosts;
-    
-    // Фильтр по портам
-    if (portOpened || portFiltered) {
-      const openedPorts = parsePortsString(portOpened);
-      const filteredPorts = parsePortsString(portFiltered);
-      
-      filteredHosts = hosts.filter(host => {
-        const hostPorts = host.Ports || [];
-        
-        let hasOpenedPort = openedPorts.length === 0;
-        let hasFilteredPort = filteredPorts.length === 0;
-        
-        if (openedPorts.length > 0) {
-          hasOpenedPort = hostPorts.some(port => 
-            port.type === 'open' && openedPorts.includes(port.port)
-          );
-        }
-        
-        if (filteredPorts.length > 0) {
-          hasFilteredPort = hostPorts.some(port => 
-            port.type === 'filtered' && filteredPorts.includes(port.port)
-          );
-        }
-        
-        return hasOpenedPort && hasFilteredPort;
-      });
-    }
-
-    // Фильтр по ключевым словам
-    if (keyword) {
-      const keywords = extractValues(keyword);
-      if (keywords.length > 0) {
-        filteredHosts = filteredHosts.filter(host => {
-          const whoisData = host.Whois || [];
-          return whoisData.some(w => {
-            const valueMatch = keywords.some(kw => 
-              w.value && w.value.toLowerCase().includes(kw.toLowerCase())
-            );
-            const keyMatch = keywords.some(kw => 
-              w.WhoisKey && w.WhoisKey.key_name && 
-              w.WhoisKey.key_name.toLowerCase().includes(kw.toLowerCase())
-            );
-            return valueMatch || keyMatch;
-          });
-        });
-      }
-    }
-
-    const formattedHosts = filteredHosts.map(formatHostData);
-
-    // Получаем общее количество
-    const totalHostsQuery = await Host.findAll({
-      ...queryOptions,
-      limit: null,
-      offset: 0,
     });
 
-    let totalFilteredHosts = totalHostsQuery;
-    
-    if (portOpened || portFiltered) {
-      const openedPorts = parsePortsString(portOpened);
-      const filteredPorts = parsePortsString(portFiltered);
-      
-      totalFilteredHosts = totalHostsQuery.filter(host => {
-        const hostPorts = host.Ports || [];
-        
-        let hasOpenedPort = openedPorts.length === 0;
-        let hasFilteredPort = filteredPorts.length === 0;
-        
-        if (openedPorts.length > 0) {
-          hasOpenedPort = hostPorts.some(port => 
-            port.type === 'open' && openedPorts.includes(port.port)
-          );
-        }
-        
-        if (filteredPorts.length > 0) {
-          hasFilteredPort = hostPorts.some(port => 
-            port.type === 'filtered' && filteredPorts.includes(port.port)
-          );
-        }
-        
-        return hasOpenedPort && hasFilteredPort;
-      });
-    }
-    
-    if (keyword) {
-      const keywords = extractValues(keyword);
-      if (keywords.length > 0) {
-        totalFilteredHosts = totalFilteredHosts.filter(host => {
-          const whoisData = host.Whois || [];
-          return whoisData.some(w => {
-            const valueMatch = keywords.some(kw => 
-              w.value && w.value.toLowerCase().includes(kw.toLowerCase())
-            );
-            const keyMatch = keywords.some(kw => 
-              w.WhoisKey && w.WhoisKey.key_name && 
-              w.WhoisKey.key_name.toLowerCase().includes(kw.toLowerCase())
-            );
-            return valueMatch || keyMatch;
-          });
-        });
-      }
-    }
+    const formattedHosts = hosts.map(formatHostData);
+    const totalItems = await Host.count({
+      where: {
+        country_id: countryData.id,
+      },
+    });
 
-    const totalItems = totalFilteredHosts.length;
     const totalPages = Math.ceil(totalItems / limitNum);
 
     return res.json({
-      items: [
-        {
-          name: countryData.name,
-          items: formattedHosts,
-          pagination: {
-            currentPage: pageNum,
-            totalPages: totalPages,
-            totalItems: totalItems,
-            hasNext: pageNum < totalPages,
-            hasPrev: pageNum > 1,
-          },
-        },
-      ],
+      items: formattedHosts,
       pagination: {
         currentPage: pageNum,
-        totalPages: 1,
-        totalItems: 1,
-        hasNext: false,
-        hasPrev: false,
+        totalPages: totalPages,
+        totalItems: totalItems,
+        hasNext: pageNum < totalPages,
+        hasPrev: pageNum > 1,
       },
-      field: "countries",
-      type: "country",
+      country: countryData.name,
     });
   } catch (error) {
     console.error("Ошибка в getCountryDetails:", error);
@@ -1986,24 +1519,9 @@ export const getCountryDetails = async (req, res) => {
   }
 };
 
-// Функция для получения данных по приоритету с пагинацией и фильтрами
+// Функция для получения данных по приоритету с пагинацией
 export const getPriorityDetails = async (req, res) => {
-  const { 
-    priority, 
-    page = 1, 
-    limit = 10,
-    // Параметры фильтров
-    ip,
-    portOpened,
-    portFiltered,
-    keyword,
-    group: groupFilter,
-    country: countryFilter,
-    whois,
-    startDate,
-    endDate
-  } = req.query;
-
+  const { priority, page = 1, limit = 10 } = req.query;
   const pageNum = Math.max(1, parseInt(page) || 1);
   const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
   const offset = (pageNum - 1) * limitNum;
@@ -2020,66 +1538,8 @@ export const getPriorityDetails = async (req, res) => {
       return res.status(404).json({ error: "Приоритет не найден" });
     }
 
-    // Собираем базовые условия
-    const whereConditions = {
-      priority_id: priorityData.id,
-    };
-
-    // Собираем фильтры
-    const filterConditions = {};
-
-    if (ip) {
-      filterConditions.ip = {
-        [Op.iLike]: `${ip}%`
-      };
-    }
-
-    if (startDate || endDate) {
-      const dateWhere = {};
-      if (startDate) dateWhere[Op.gte] = new Date(startDate);
-      if (endDate) dateWhere[Op.lte] = new Date(endDate);
-      filterConditions.updated_at = dateWhere;
-    }
-
-    if (groupFilter) {
-      const groupNames = extractValues(groupFilter);
-      const groupIds = await getGroupIdsFromNames(groupNames);
-      if (groupIds.length > 0) {
-        filterConditions.grouping_id = groupIds;
-      }
-    }
-
-    if (countryFilter) {
-      const countryNames = extractValues(countryFilter);
-      const countryIds = await getCountryIdsFromNames(countryNames);
-      if (countryIds.length > 0) {
-        filterConditions.country_id = countryIds;
-      }
-    }
-
-    // Фильтр по наличию WHOIS
-    let includeWhoisOptions = null;
-    if (whois === 'withWhois' || whois === 'noWhois') {
-      includeWhoisOptions = {
-        model: Whois,
-        attributes: ["value"],
-        include: [
-          {
-            model: WhoisKey,
-            attributes: ["key_name"],
-            required: false,
-          },
-        ],
-        required: whois === 'withWhois',
-      };
-    }
-
-    const finalWhere = {
-      ...whereConditions,
-      ...filterConditions
-    };
-
-    const queryOptions = {
+    // Получаем хосты для этого приоритета с пагинацией
+    const hosts = await Host.findAll({
       include: [
         {
           model: Port,
@@ -2102,181 +1562,56 @@ export const getPriorityDetails = async (req, res) => {
           attributes: ["id", "name"],
           required: false,
         },
+        {
+          model: Whois,
+          attributes: ["value"],
+          include: [
+            {
+              model: WhoisKey,
+              attributes: ["key_name"],
+              required: false,
+            },
+          ],
+          required: false,
+        },
       ],
-      where: finalWhere,
+      where: {
+        priority_id: priorityData.id,
+      },
       order: [
         ["priority_id", "DESC"],
         ["updated_at", "DESC"],
       ],
       limit: limitNum,
       offset: offset,
-    };
-
-    if (includeWhoisOptions) {
-      queryOptions.include.push(includeWhoisOptions);
-    } else {
-      queryOptions.include.push({
-        model: Whois,
-        attributes: ["value"],
-        include: [
-          {
-            model: WhoisKey,
-            attributes: ["key_name"],
-            required: false,
-          },
-        ],
-        required: false,
-      });
-    }
-
-    const hosts = await Host.findAll(queryOptions);
-
-    // Дополнительная фильтрация
-    let filteredHosts = hosts;
-    
-    if (portOpened || portFiltered) {
-      const openedPorts = parsePortsString(portOpened);
-      const filteredPorts = parsePortsString(portFiltered);
-      
-      filteredHosts = hosts.filter(host => {
-        const hostPorts = host.Ports || [];
-        
-        let hasOpenedPort = openedPorts.length === 0;
-        let hasFilteredPort = filteredPorts.length === 0;
-        
-        if (openedPorts.length > 0) {
-          hasOpenedPort = hostPorts.some(port => 
-            port.type === 'open' && openedPorts.includes(port.port)
-          );
-        }
-        
-        if (filteredPorts.length > 0) {
-          hasFilteredPort = hostPorts.some(port => 
-            port.type === 'filtered' && filteredPorts.includes(port.port)
-          );
-        }
-        
-        return hasOpenedPort && hasFilteredPort;
-      });
-    }
-
-    if (keyword) {
-      const keywords = extractValues(keyword);
-      if (keywords.length > 0) {
-        filteredHosts = filteredHosts.filter(host => {
-          const whoisData = host.Whois || [];
-          return whoisData.some(w => {
-            const valueMatch = keywords.some(kw => 
-              w.value && w.value.toLowerCase().includes(kw.toLowerCase())
-            );
-            const keyMatch = keywords.some(kw => 
-              w.WhoisKey && w.WhoisKey.key_name && 
-              w.WhoisKey.key_name.toLowerCase().includes(kw.toLowerCase())
-            );
-            return valueMatch || keyMatch;
-          });
-        });
-      }
-    }
-
-    const formattedHosts = filteredHosts.map(formatHostData);
-
-    // Получаем общее количество
-    const totalHostsQuery = await Host.findAll({
-      ...queryOptions,
-      limit: null,
-      offset: 0,
     });
 
-    let totalFilteredHosts = totalHostsQuery;
-    
-    if (portOpened || portFiltered) {
-      const openedPorts = parsePortsString(portOpened);
-      const filteredPorts = parsePortsString(portFiltered);
-      
-      totalFilteredHosts = totalHostsQuery.filter(host => {
-        const hostPorts = host.Ports || [];
-        
-        let hasOpenedPort = openedPorts.length === 0;
-        let hasFilteredPort = filteredPorts.length === 0;
-        
-        if (openedPorts.length > 0) {
-          hasOpenedPort = hostPorts.some(port => 
-            port.type === 'open' && openedPorts.includes(port.port)
-          );
-        }
-        
-        if (filteredPorts.length > 0) {
-          hasFilteredPort = hostPorts.some(port => 
-            port.type === 'filtered' && filteredPorts.includes(port.port)
-          );
-        }
-        
-        return hasOpenedPort && hasFilteredPort;
-      });
-    }
-    
-    if (keyword) {
-      const keywords = extractValues(keyword);
-      if (keywords.length > 0) {
-        totalFilteredHosts = totalFilteredHosts.filter(host => {
-          const whoisData = host.Whois || [];
-          return whoisData.some(w => {
-            const valueMatch = keywords.some(kw => 
-              w.value && w.value.toLowerCase().includes(kw.toLowerCase())
-            );
-            const keyMatch = keywords.some(kw => 
-              w.WhoisKey && w.WhoisKey.key_name && 
-              w.WhoisKey.key_name.toLowerCase().includes(kw.toLowerCase())
-            );
-            return valueMatch || keyMatch;
-          });
-        });
-      }
-    }
+    const formattedHosts = hosts.map(formatHostData);
+    const totalItems = await Host.count({
+      where: {
+        priority_id: priorityData.id,
+      },
+    });
 
-    const totalItems = totalFilteredHosts.length;
     const totalPages = Math.ceil(totalItems / limitNum);
 
     return res.json({
-      items: [
-        {
-          name: priorityData.name,
-          items: formattedHosts,
-          pagination: {
-            currentPage: pageNum,
-            totalPages: totalPages,
-            totalItems: totalItems,
-            hasNext: pageNum < totalPages,
-            hasPrev: pageNum > 1,
-          },
-        },
-      ],
+      items: formattedHosts,
       pagination: {
         currentPage: pageNum,
-        totalPages: 1,
-        totalItems: 1,
-        hasNext: false,
-        hasPrev: false,
+        totalPages: totalPages,
+        totalItems: totalItems,
+        hasNext: pageNum < totalPages,
+        hasPrev: pageNum > 1,
       },
-      field: "priorities",
-      type: "priority",
+      priority: priorityData.name,
     });
   } catch (error) {
     console.error("Ошибка в getPriorityDetails:", error);
     return res.status(500).json({ error: "Внутренняя ошибка сервера" });
   }
 };
-
-// Добавьте в ваш файл маршрутов (например, в app.js или router.js):
-/*
-app.get('/groups/group', getGroupDetails);
-app.get('/countrys/group', getCountryDetails);
-app.get('/prioritys/group', getPriorityDetails);
-*/
-
-//РАБОЧИЙ ВАРИАНТ ВЕРСИИ НИЖЕ
-// =============================================
+/*************************************************************************** */
 // import { Sequelize } from "sequelize";
 // const { Op } = Sequelize;
 // import {
@@ -2292,20 +1627,22 @@ app.get('/prioritys/group', getPriorityDetails);
 // } from "../models/index.js";
 
 // // Вспомогательная функция для форматирования данных хоста
-// // Обновленная вспомогательная функция для форматирования данных хоста
 // const formatHostData = (host) => {
 //   const openPorts = [];
 //   const filteredPorts = [];
 //   const openPortsSet = new Set();
 //   const filteredPortsSet = new Set();
 
+//   // console.log('host.Ports >> ', host.Ports)
 //   if (host.Ports && Array.isArray(host.Ports)) {
 //     host.Ports.forEach((port) => {
+//       // console.log('port.WellKnownPort ', port.WellKnownPort)
 //       const portInfo = {
 //         port: port.port,
-//         name: port.WellKnownPort?.name || null,
+//         name: port.name || port.WellKnownPort?.dataValues.name  || null,
+//         // name: port.name || null,
 //       };
-
+//       // console.log('portInfo >> ', portInfo)
 //       if (port.type === "open" && !openPortsSet.has(port.port)) {
 //         openPorts.push(portInfo);
 //         openPortsSet.add(port.port);
@@ -2315,6 +1652,7 @@ app.get('/prioritys/group', getPriorityDetails);
 //       }
 //     });
 //   }
+//   // console.log('openPorts >> ', openPorts)
 
 //   const hasWhois =
 //     host.Whois && Array.isArray(host.Whois) && host.Whois.length > 0;
@@ -2324,25 +1662,26 @@ app.get('/prioritys/group', getPriorityDetails);
 //     grouping: null,
 //   };
 
-//   if (host.priority_id || host.Priority) {
+//   // @TODO изменил Priority => priority county и grouping
+//   if (host.priority_id || host.priority) {
 //     priorityInfo.priority = {
-//       id: host.priority_id || host.Priority?.id,
-//       name: host.Priority?.name || "Unknown",
+//       id: host.priority_id || host.priority?.id,
+//       name: host.priority?.name || "Unknown",
 //     };
 //   }
 
-//   if (host.grouping_id || host.Grouping) {
+//   if (host.grouping_id || host.grouping) {
 //     priorityInfo.grouping = {
-//       id: host.grouping_id || host.Grouping?.id,
-//       name: host.Grouping?.name || null,
+//       id: host.grouping_id || host.grouping?.id,
+//       name: host.grouping?.name || null,
 //     };
 //   }
 
 //   // Добавляем информацию о стране
-//   const countryInfo = host.Country
+//   const countryInfo = host.country
 //     ? {
-//         id: host.Country.id,
-//         name: host.Country.name,
+//         id: host.country.id,
+//         name: host.country.name,
 //       }
 //     : null;
 
@@ -2379,11 +1718,9 @@ app.get('/prioritys/group', getPriorityDetails);
 // // Вспомогательная функция для парсинга портов из строки
 // const parsePortsFromString = (portString) => {
 //   if (!portString) return [];
-
 //   // Проверяем, является ли portString массивом
 //   const values = Array.isArray(portString) ? portString : [portString];
 //   const ports = [];
-
 //   values.forEach((value) => {
 //     if (typeof value === "string") {
 //       const portMatch = value.match(/(\d+)/);
@@ -2395,14 +1732,12 @@ app.get('/prioritys/group', getPriorityDetails);
 //       }
 //     }
 //   });
-
 //   return [...new Set(ports)];
 // };
 
 // // Функция для получения ID приоритетов по названиям
 // const getPriorityIdsFromNames = async (priorityNames) => {
 //   if (!priorityNames) return [];
-
 //   const names = Array.isArray(priorityNames) ? priorityNames : [priorityNames];
 //   const priorities = await Priority.findAll({
 //     attributes: ["id"],
@@ -2411,14 +1746,12 @@ app.get('/prioritys/group', getPriorityDetails);
 //     },
 //     raw: true,
 //   });
-
 //   return priorities.map((p) => p.id);
 // };
 
 // // Функция для получения ID групп по названиям
 // const getGroupIdsFromNames = async (groupNames) => {
 //   if (!groupNames) return [];
-
 //   const names = Array.isArray(groupNames) ? groupNames : [groupNames];
 //   const groups = await Grouping.findAll({
 //     attributes: ["id"],
@@ -2427,14 +1760,12 @@ app.get('/prioritys/group', getPriorityDetails);
 //     },
 //     raw: true,
 //   });
-
 //   return groups.map((g) => g.id);
 // };
 
 // // Функция для получения ID стран по названиям
 // const getCountryIdsFromNames = async (countryNames) => {
 //   if (!countryNames) return [];
-
 //   const names = Array.isArray(countryNames) ? countryNames : [countryNames];
 //   const countries = await Country.findAll({
 //     attributes: ["id"],
@@ -2443,7 +1774,6 @@ app.get('/prioritys/group', getPriorityDetails);
 //     },
 //     raw: true,
 //   });
-
 //   return countries.map((c) => c.id);
 // };
 
@@ -2453,11 +1783,9 @@ app.get('/prioritys/group', getPriorityDetails);
 //   if (Array.isArray(portString)) {
 //     return parsePortsFromString(portString);
 //   }
-
 //   // Разделяем строку по запятым
 //   const portStrings = portString.split(",").map((s) => s.trim());
 //   const ports = [];
-
 //   portStrings.forEach((str) => {
 //     const portMatch = str.match(/(\d+)/);
 //     if (portMatch) {
@@ -2467,7 +1795,6 @@ app.get('/prioritys/group', getPriorityDetails);
 //       }
 //     }
 //   });
-
 //   return [...new Set(ports)];
 // };
 
@@ -2475,7 +1802,13 @@ app.get('/prioritys/group', getPriorityDetails);
 // const extractValues = (input) => {
 //   if (!input) return [];
 //   if (Array.isArray(input)) return input;
-//   if (typeof input === "string") return [input];
+//   if (typeof input === "string") {
+//     // Разделяем по запятым и убираем пробелы
+//     return input
+//       .split(",")
+//       .map((s) => s.trim())
+//       .filter((s) => s);
+//   }
 //   return [];
 // };
 
@@ -2509,12 +1842,10 @@ app.get('/prioritys/group', getPriorityDetails);
 //     // 1. Фильтр по IP
 //     if (ip) {
 //       console.log("Фильтр по IP:", ip);
-
 //       const ipQuery = `
-//         SELECT id FROM hosts
+//         SELECT id FROM hosts 
 //         WHERE CAST(ip AS TEXT) ILIKE :ipPattern
 //       `;
-
 //       const ipHosts = await sequelize.query(ipQuery, {
 //         replacements: {
 //           ipPattern: `${ip}%`,
@@ -2559,13 +1890,15 @@ app.get('/prioritys/group', getPriorityDetails);
 //         hostIds.size > 0
 //           ? new Set(Array.from(hostIds).filter((id) => dateHostIds.has(id)))
 //           : dateHostIds;
+
 //       console.log(`После фильтра по дате: ${hostIds.size} хостов`);
 //     }
 
 //     // 3. Фильтр по приоритету
 //     if (priority) {
 //       console.log("Фильтр по приоритету:", priority);
-//       const priorityIds = await getPriorityIdsFromNames(priority);
+//       const priorityNames = extractValues(priority);
+//       const priorityIds = await getPriorityIdsFromNames(priorityNames);
 
 //       if (priorityIds.length > 0) {
 //         const priorityHosts = await Host.findAll({
@@ -2605,13 +1938,15 @@ app.get('/prioritys/group', getPriorityDetails);
 //               )
 //             : priorityHostIds;
 //       }
+
 //       console.log(`После фильтра по приоритету: ${hostIds.size} хостов`);
 //     }
 
 //     // 4. Фильтр по группировке
 //     if (group) {
 //       console.log("Фильтр по группировке:", group);
-//       const groupIds = await getGroupIdsFromNames(group);
+//       const groupNames = extractValues(group);
+//       const groupIds = await getGroupIdsFromNames(groupNames);
 
 //       if (groupIds.length > 0) {
 //         const groupHosts = await Host.findAll({
@@ -2638,14 +1973,15 @@ app.get('/prioritys/group', getPriorityDetails);
 //             ? new Set(Array.from(hostIds).filter((id) => groupHostIds.has(id)))
 //             : groupHostIds;
 //       }
+
 //       console.log(`После фильтра по группировке: ${hostIds.size} хостов`);
 //     }
 
 //     // 5. Фильтр по стране
 //     if (country) {
-//       const countryIds = await getCountryIdsFromNames(country);
 //       console.log("Фильтр по стране:", country);
-//       console.log(" countryIds ########### ", countryIds);
+//       const countryNames = extractValues(country);
+//       const countryIds = await getCountryIdsFromNames(countryNames);
 
 //       if (countryIds.length > 0) {
 //         const countryHosts = await Host.findAll({
@@ -2674,6 +2010,7 @@ app.get('/prioritys/group', getPriorityDetails);
 //               )
 //             : countryHostIds;
 //       }
+
 //       console.log(`После фильтра по стране: ${hostIds.size} хостов`);
 //     }
 
@@ -2739,13 +2076,13 @@ app.get('/prioritys/group', getPriorityDetails);
 //               )
 //             : noWhoisHostIds;
 //       }
+
 //       console.log(`После фильтра по WHOIS: ${hostIds.size} хостов`);
 //     }
 
 //     // 7. Фильтр по ключевым словам
 //     if (keyword) {
 //       console.log("Фильтр по ключевым словам:", keyword);
-
 //       const keywords = extractValues(keyword);
 
 //       if (keywords.length > 0) {
@@ -2755,11 +2092,10 @@ app.get('/prioritys/group', getPriorityDetails);
 //             FROM hosts h
 //             INNER JOIN whois w ON h.id = w.host_id
 //             INNER JOIN whois_keys wk ON w.key_id = wk.id
-//             WHERE (LOWER(w.value) LIKE LOWER(:keyword)
+//             WHERE (LOWER(w.value) LIKE LOWER(:keyword) 
 //                OR LOWER(wk.key_name) LIKE LOWER(:keyword))
 //                ${hostIds.size > 0 ? "AND h.id IN (:hostIds)" : ""}
 //           `;
-
 //           return sequelize.query(keywordSql, {
 //             replacements: {
 //               keyword: `%${kw}%`,
@@ -2787,17 +2123,18 @@ app.get('/prioritys/group', getPriorityDetails);
 //               )
 //             : keywordHostIds;
 //       }
+
 //       console.log(`После фильтра по ключевым словам: ${hostIds.size} хостов`);
 //     }
 
-//     // 8. Фильтр по портам @TODO на &&
+//     // 8. Фильтр по портам
 //     if (portOpened || portFiltered) {
 //       console.log("Фильтр по портам:", { portOpened, portFiltered });
-//       console.log('ЕСТЬ ЧТОТОТОТОТОТ > ')
 //       const openedPorts = parsePortsString(portOpened);
 //       const filteredPorts = parsePortsString(portFiltered);
 
 //       let portWhereConditions = [];
+
 //       if (openedPorts.length > 0) {
 //         portWhereConditions.push({
 //           port: openedPorts,
@@ -2811,8 +2148,6 @@ app.get('/prioritys/group', getPriorityDetails);
 //           type: "filtered",
 //         });
 //       }
-
-//       console.log('portWhereConditions > ', portWhereConditions)
 
 //       if (portWhereConditions.length > 0) {
 //         const portHosts = await Port.findAll({
@@ -2833,9 +2168,11 @@ app.get('/prioritys/group', getPriorityDetails);
 //           hostIds.size > 0
 //             ? new Set(Array.from(hostIds).filter((id) => portHostIds.has(id)))
 //             : portHostIds;
+
 //         console.log(`После фильтра по портам: ${hostIds.size} хостов`);
 //       }
 //     }
+
 //     // Получаем отфильтрованные ID хостов
 //     const finalHostIds = Array.from(hostIds);
 
@@ -2848,53 +2185,192 @@ app.get('/prioritys/group', getPriorityDetails);
 //     );
 
 //     // Получаем полные данные для отфильтрованных хостов
-//     const hosts = await Host.findAll({
-//       include: [
-//         {
-//           model: Port,
-//           attributes: ["port", "type"],
-//           include: [
-//             {
-//               model: WellKnownPort,
-//               attributes: ["name"],
-//               required: false,
-//             },
-//           ],
-//         },
-//         {
-//           model: Priority,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Grouping,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Country,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Whois,
-//           attributes: ["value"],
-//           include: [
-//             {
-//               model: WhoisKey,
-//               attributes: ["key_name"],
-//               required: false,
-//             },
-//           ],
-//           required: false,
-//         },
-//       ],
-//       where: { id: finalHostIds },
-//       order: [
-//         ["priority_id", "DESC"],
-//         ["updated_at", "DESC"],
-//       ],
+//     // const hosts = await Host.findAll({
+//     //   include: [
+//     //     {
+//     //       model: Port,
+//     //       attributes: ["port", "type"],
+//     //       include: [
+//     //         {
+//     //           model: WellKnownPort,
+//     //           attributes: ["name"],
+//     //           required: false,
+//     //         },
+//     //       ],
+//     //     },
+//     //     {
+//     //       model: Priority,
+//     //       attributes: ["id", "name"],
+//     //       required: false,
+//     //     },
+//     //     {
+//     //       model: Grouping,
+//     //       attributes: ["id", "name"],
+//     //       required: false,
+//     //     },
+//     //     {
+//     //       model: Country,
+//     //       attributes: ["id", "name"],
+//     //       required: false,
+//     //     },
+//     //     {
+//     //       model: Whois,
+//     //       attributes: ["value"],
+//     //       include: [
+//     //         {
+//     //           model: WhoisKey,
+//     //           attributes: ["key_name"],
+//     //           required: false,
+//     //         },
+//     //       ],
+//     //       required: false,
+//     //     },
+//     //   ],
+//     //   where: { id: finalHostIds },
+//     //   order: [
+//     //     ["priority_id", "DESC"],
+//     //     ["updated_at", "DESC"],
+//     //   ],
+//     // });
+
+//     /*********************************** */
+
+//     const hosts = await sequelize.query(`
+//       SELECT
+//         h.id,
+//         h.ip,
+//         h.reachable,
+//         h.updated_at,
+//         h.priority_id,
+//         h.grouping_id,
+//         h.country_id,
+
+//         -- Данные о приоритете
+//         p.id as "priority.id",
+//         p.name as "priority.name",
+
+//         -- Данные о группировке
+//         g.id as "grouping.id",
+//         g.name as "grouping.name",
+
+//         -- Данные о стране
+//         c.id as "country.id",
+//         c.name as "country.name"
+
+//       FROM hosts h
+
+//       -- LEFT JOIN для приоритета
+//       LEFT JOIN host_priorities p ON h.priority_id = p.id
+
+//       -- LEFT JOIN для группировки
+//       LEFT JOIN host_groupings g ON h.grouping_id = g.id
+
+//       -- LEFT JOIN для страны
+//       LEFT JOIN countries c ON h.country_id = c.id
+
+//       WHERE h.id IN (:finalHostIds)
+
+//       ORDER BY
+//         h.priority_id DESC NULLS LAST,
+//         h.updated_at DESC
+//     `, {
+//       replacements: { finalHostIds },
+//       type: sequelize.QueryTypes.SELECT,
+//       nest: true,
 //     });
+
+//     // Затем отдельно получаем связанные данные
+//     if (hosts.length > 0) {
+//       const hostIds = hosts.map(h => h.id);
+
+//       // Получаем порты с well_known_ports - ИСПРАВЛЕННЫЙ ЗАПРОС
+//       const ports = await sequelize.query(`
+//         SELECT
+//           p.host_id,
+//           p.port,
+//           p.type,
+//           wkp.name as well_known_port_name
+//         FROM ports p
+//         LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+//         WHERE p.host_id IN (:hostIds)
+//       `, {
+//         replacements: { hostIds },
+//         type: sequelize.QueryTypes.SELECT,
+//         nest: false,  // Используем false для плоской структуры
+//       });
+
+//       // console.log('ports >>> ', ports)
+
+//       // Получаем WHOIS данные
+//       const whoisData = await sequelize.query(`
+//         SELECT
+//           w.host_id,
+//           w.value,
+//           wk.key_name as "WhoisKey.key_name"
+//         FROM whois w
+//         LEFT JOIN whois_keys wk ON w.key_id = wk.id
+//         WHERE w.host_id IN (:hostIds)
+//       `, {
+//         replacements: { hostIds },
+//         type: sequelize.QueryTypes.SELECT,
+//         nest: true,
+//       });
+
+//       // Группируем данные по host_id
+//       const portsByHost = {};
+//       ports.forEach(port => {
+//         if (!portsByHost[port.host_id]) {
+//           portsByHost[port.host_id] = [];
+//         }
+
+//         // Получаем имя порта из well_known_port_name
+//         const portName = port.well_known_port_name || null;
+
+//         portsByHost[port.host_id].push({
+//           port: port.port,
+//           type: port.type,
+//           name: portName  // Простое поле name с именем порта
+//         });
+//       });
+//       // console.log('portsByHost >>> ', portsByHost)
+
+//       const whoisByHost = {};
+//       whoisData.forEach(whois => {
+//         if (!whoisByHost[whois.host_id]) {
+//           whoisByHost[whois.host_id] = [];
+//         }
+//         whoisByHost[whois.host_id].push({
+//           value: whois.value,
+//           WhoisKey: whois['WhoisKey.key_name'] ? { key_name: whois['WhoisKey.key_name'] } : null
+//         });
+//       });
+
+//       // Объединяем все данные
+//       hosts.forEach(host => {
+//         // Получаем все порты для хоста
+//         const allPorts = portsByHost[host.id] || [];
+
+//         // Разделяем порты по типам
+//         const openPorts = allPorts.filter(p => p.type === 'open')
+//           .map(p => ({ port: p.port, name: p.name }));
+
+//         const filteredPorts = allPorts.filter(p => p.type === 'filtered')
+//           .map(p => ({ port: p.port, name: p.name }));
+
+//         // Сохраняем оригинальную структуру
+//         host.Ports = allPorts;
+//         host.Whois = whoisByHost[host.id] || [];
+
+//         // Добавляем структурированные данные для вывода
+//         host.port_data = {
+//           open: openPorts,
+//           filtered: filteredPorts
+//         };
+//       });
+//     }
+//     /*********************************** */
+
+//     // console.log("hosts >>> ", hosts[34]);
 
 //     // Форматируем данные хостов
 //     const formattedHosts = hosts.map(formatHostData);
@@ -2947,7 +2423,6 @@ app.get('/prioritys/group', getPriorityDetails);
 //       return await groupByCountry(hosts);
 //     case "ip":
 //       return hosts;
-//     // return await groupByIP(hosts, page, limit, offset);
 //     case "keyword":
 //       return await groupByKeywords(hosts);
 //     case "whois":
@@ -3065,17 +2540,17 @@ app.get('/prioritys/group', getPriorityDetails);
 
 //   hosts.forEach((host) => {
 //     const groupId = host.priority_info.grouping?.id || 0;
-//     const groupName = host.priority_info.grouping?.name || "Неопределенная группа";
+//     const groupName =
+//       host.priority_info.grouping?.name || "Неопределенная группа";
 
 //     if (!groupMap.has(groupId)) {
-
-//         groupMap.set(groupId, {
-//           id: groupId,
-//           name: groupName,
-//           count: 0,
-//           items: [],
-//         });
-//       }
+//       groupMap.set(groupId, {
+//         id: groupId,
+//         name: groupName,
+//         count: 0,
+//         items: [],
+//       });
+//     }
 
 //     const group = groupMap.get(groupId);
 //     group.items.push(host);
@@ -3083,87 +2558,19 @@ app.get('/prioritys/group', getPriorityDetails);
 //   });
 
 //   return Array.from(groupMap.values())
-//       .sort((a, b) => a.name.localeCompare(b.name))
-//       .map((group) => ({
-//         ...group,
-//         pagination: {
-//           currentPage: 1,
-//           totalPages: Math.ceil(group.items.length / 10),
-//           totalItems: group.items.length,
-//           hasNext: group.items.length > 10,
-//           hasPrev: false,
-//         },
-//         items: group.items.slice(0, 10),
-//       }))
+//     .sort((a, b) => a.name.localeCompare(b.name))
+//     .map((group) => ({
+//       ...group,
+//       pagination: {
+//         currentPage: 1,
+//         totalPages: Math.ceil(group.items.length / 10),
+//         totalItems: group.items.length,
+//         hasNext: group.items.length > 10,
+//         hasPrev: false,
+//       },
+//       items: group.items.slice(0, 10),
+//     }));
 // }
-
-// // async function groupByHostGroup(hosts) {
-// //   const groupedMap = new Map();
-// //   const withoutGroupMap = new Map();
-// //   const typeWithoutGroup = "Без группы";
-
-// //   hosts.forEach((host) => {
-// //     const groupId = host.priority_info.grouping?.id || 0;
-// //     const groupName = host.priority_info.grouping?.name || typeWithoutGroup;
-
-// //     if (!groupedMap.has(groupId)) {
-// //       if (groupName === typeWithoutGroup) {
-// //         withoutGroupMap.set(groupId, {
-// //           id: groupId,
-// //           name: groupName,
-// //           count: 0,
-// //           items: [],
-// //         });
-// //       } else {
-// //         groupedMap.set(groupId, {
-// //           id: groupId,
-// //           name: groupName,
-// //           count: 0,
-// //           items: [],
-// //         });
-// //       }
-// //     }
-
-// //     const group = groupName === typeWithoutGroup ? withoutGroupMap.get(groupId) : groupedMap.get(groupId);
-// //     group.items.push(host);
-// //     group.count++;
-// //   });
-
-// //   // Преобразуем Map в массив и сортируем
-// //   const sortedGroups = Array.from(groupedMap.values()).sort((a, b) => a.name.localeCompare(b.name));
-
-// //   // Создаем пагинацию для каждой группы
-// //   const paginatedGroups = sortedGroups.map((group) => ({
-// //     ...group,
-// //     pagination: {
-// //       currentPage: 1,
-// //       totalPages: Math.ceil(group.items.length / 10),
-// //       totalItems: group.items.length,
-// //       hasNext: group.items.length > 10,
-// //       hasPrev: false,
-// //     },
-// //     items: group.items.slice(0, 10),
-// //   }));
-
-// //   // Преобразуем Map "Без группы" в массив
-// //   const withoutGroupArray = Array.from(withoutGroupMap.values());
-
-// //   // Объединяем все группы и добавляем "Без группы" в конец, но отображаем все элементы
-// //   return [
-// //     ...paginatedGroups,
-// //     ...withoutGroupArray.map((group) => ({
-// //       ...group,
-// //       pagination: {
-// //         currentPage: 1,
-// //         totalPages: Math.ceil(group.items.length / 10),
-// //         totalItems: group.items.length,
-// //         hasNext: false,
-// //         hasPrev: false,
-// //       },
-// //       items: group.items, // Отображаем все элементы
-// //     })),
-// //   ];
-// // }
 
 // // Группировка по стране
 // async function groupByCountry(hosts) {
@@ -3202,191 +2609,289 @@ app.get('/prioritys/group', getPriorityDetails);
 //     }));
 // }
 
-// // Группировка по IP (просто возвращаем хосты)
-// // async function groupByIP(hosts, page, limit, offset) {
-// //   // Для группировки по IP просто возвращаем хосты с пагинацией
-// //   return [
-// //     {
-// //       field: "ip",
-// //       count: hosts.length,
-// //       items: hosts.slice(offset, offset + limit),
-// //       pagination: {
-// //         currentPage: page,
-// //         totalPages: Math.ceil(hosts.length / limit),
-// //         totalItems: hosts.length,
-// //         hasNext: offset + limit < hosts.length,
-// //         hasPrev: page > 1,
-// //       },
-// //     },
-// //   ];
-// // }
-
-// // Группировка по ключевым словам
+// // Группировка по ключевым словам оптимизированный
 // async function groupByKeywords(hosts) {
 //   try {
-//     // Получаем ID всех отфильтрованных хостов
-//     const hostIds = hosts.map((host) => host.id);
-
-//     if (!hostIds.length) {
+//     if (!hosts || hosts.length === 0) {
 //       return [];
 //     }
 
-//     // Используем raw SQL для получения уникальных ключевых слов с подсчетом хостов
-//     const uniqueKeywordsSql = `
-//       SELECT DISTINCT wk.key_name, COUNT(DISTINCT w.host_id) as count
-//       FROM whois_keys wk
-//       INNER JOIN whois w ON wk.id = w.key_id
-//       WHERE w.host_id IN (:hostIds)
-//       GROUP BY wk.key_name
-//       ORDER BY wk.key_name ASC
+//     // Создаем Map для быстрого поиска хостов по ID
+//     const hostsMap = new Map();
+//     hosts.forEach(host => {
+//       hostsMap.set(host.id, host);
+//     });
+
+//     // Получаем ID всех отфильтрованных хостов
+//     const hostIds = hosts.map(host => host.id);
+
+//     // Используем один SQL запрос для получения всех необходимых данных
+//     const keywordDataSql = `
+//       WITH host_keywords AS (
+//         SELECT 
+//           w.host_id,
+//           wk.key_name,
+//           COUNT(*) OVER (PARTITION BY wk.key_name) as total_count
+//         FROM whois w
+//         INNER JOIN whois_keys wk ON w.key_id = wk.id
+//         WHERE w.host_id IN (:hostIds)
+//         GROUP BY w.host_id, wk.key_name
+//         ORDER BY wk.key_name ASC
+//       )
+//       SELECT 
+//         key_name,
+//         total_count,
+//         ARRAY_AGG(host_id) as host_ids
+//       FROM host_keywords
+//       GROUP BY key_name, total_count
+//       ORDER BY key_name ASC
 //     `;
 
-//     const uniqueKeywordsResult = await sequelize.query(uniqueKeywordsSql, {
+//     const keywordGroupsResult = await sequelize.query(keywordDataSql, {
 //       replacements: { hostIds },
 //       type: sequelize.QueryTypes.SELECT,
 //     });
 
-//     // Получаем полные WHOIS данные для хостов с группировкой по ключевым словам
-//     const hostsWithWhois = await Host.findAll({
-//       include: [
-//         {
-//           model: Port,
-//           attributes: ["port", "type"],
-//           include: [
-//             {
-//               model: WellKnownPort,
-//               attributes: ["name"],
-//               required: false,
-//             },
-//           ],
-//         },
-//         {
-//           model: Priority,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Grouping,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Country,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Whois,
-//           attributes: ["value"],
-//           include: [
-//             {
-//               model: WhoisKey,
-//               attributes: ["key_name"],
-//               required: false,
-//             },
-//           ],
-//           required: false,
-//         },
-//       ],
-//       where: {
-//         id: { [Op.in]: hostIds },
-//       },
-//       order: [
-//         ["priority_id", "DESC"],
-//         ["updated_at", "DESC"],
-//       ],
-//     });
-
-//     // Форматируем данные хостов (используем ту же функцию formatHostData)
-//     const formattedHostsMap = new Map();
-//     hostsWithWhois.forEach((host) => {
-//       if (!formattedHostsMap.has(host.id)) {
-//         formattedHostsMap.set(host.id, formatHostData(host));
-//       }
-//     });
-
-//     // Инициализируем группы для всех уникальных ключевых слов
-//     const keywordGroups = {};
-
-//     uniqueKeywordsResult.forEach((row) => {
-//       const keyword = row.key_name;
-//       const count = parseInt(row.count);
-//       keywordGroups[keyword] = {
-//         keyword: keyword,
-//         count: count,
-//         items: [],
-//       };
-//     });
-
-//     // Группируем хосты по ключевым словам через WHOIS данные
-//     for (const host of hostsWithWhois) {
-//       const formattedHost = formattedHostsMap.get(host.id);
-//       const hostWhois = host.Whois || [];
-
-//       if (formattedHost && hostWhois.length > 0) {
-//         for (const whois of hostWhois) {
-//           const keyName = whois.WhoisKey?.key_name;
-//           if (keyName && keywordGroups[keyName]) {
-//             // Проверяем, что хост еще не добавлен в эту группу
-//             const hostExists = keywordGroups[keyName].items.some(
-//               (item) => item.id === formattedHost.id
-//             );
-//             if (!hostExists) {
-//               keywordGroups[keyName].items.push(formattedHost);
-//             }
-//           }
-//         }
-//       }
+//     // Если нет данных WHOIS, возвращаем пустой массив
+//     if (!keywordGroupsResult.length) {
+//       return [];
 //     }
 
-//     // Сортируем хосты внутри каждой группы по приоритету и дате
-//     Object.values(keywordGroups).forEach((group) => {
-//       group.items.sort((a, b) => {
-//         // Сначала сортируем по приоритету (DESC)
+//     // Собираем группы
+//     const groups = keywordGroupsResult.map(row => {
+//       const keyword = row.key_name;
+//       const totalCount = parseInt(row.total_count);
+//       const hostIdArray = row.host_ids || [];
+      
+//       // Получаем хосты для этой группы (первые 10)
+//       const groupHosts = [];
+//       const addedHostIds = new Set();
+      
+//       for (const hostId of hostIdArray) {
+//         if (groupHosts.length >= 10) break;
+        
+//         const host = hostsMap.get(hostId);
+//         if (host && !addedHostIds.has(hostId)) {
+//           groupHosts.push(host);
+//           addedHostIds.add(hostId);
+//         }
+//       }
+      
+//       // Сортируем хосты внутри группы по приоритету и дате
+//       groupHosts.sort((a, b) => {
 //         const priorityA = a.priority_info?.priority?.id || 0;
 //         const priorityB = b.priority_info?.priority?.id || 0;
-
+        
 //         if (priorityB !== priorityA) {
 //           return priorityB - priorityA;
 //         }
-
-//         // Если приоритеты одинаковые, сортируем по дате обновления
+        
 //         if (a.updated_at && b.updated_at) {
 //           return new Date(b.updated_at) - new Date(a.updated_at);
 //         }
+        
 //         return 0;
 //       });
+
+//       const totalItemsInGroup = Math.min(totalCount, hostIdArray.length);
+//       const totalPagesInGroup = Math.ceil(totalItemsInGroup / 10);
+
+//       return {
+//         keyword: keyword,
+//         name: keyword,
+//         count: totalCount,
+//         items: groupHosts,
+//         pagination: {
+//           currentPage: 1,
+//           totalPages: totalPagesInGroup,
+//           totalItems: totalItemsInGroup,
+//           hasNext: totalItemsInGroup > 10,
+//           hasPrev: false,
+//         },
+//       };
 //     });
 
-//     // Преобразуем в нужный формат и сортируем по возрастанию ключевых слов
-//     const groups = Object.values(keywordGroups)
-//       .filter((group) => group.items.length > 0)
-//       .map((group) => {
-//         const totalItemsInGroup = group.items.length;
-//         const totalPagesInGroup = Math.ceil(totalItemsInGroup / 10); // 10 хостов на страницу внутри группы
+//     // Фильтруем пустые группы и возвращаем результат
+//     return groups.filter(group => group.items.length > 0);
 
-//         return {
-//           keyword: group.keyword,
-//           count: group.count,
-//           name: group.keyword, // Добавляем name для совместимости
-//           items: group.items.slice(0, 10), // Первые 10 хостов для отображения
-//           pagination: {
-//             currentPage: 1,
-//             totalPages: totalPagesInGroup,
-//             totalItems: totalItemsInGroup,
-//             hasNext: totalItemsInGroup > 10,
-//             hasPrev: false,
-//           },
-//         };
-//       })
-//       .sort((a, b) => a.keyword.localeCompare(b.keyword));
-
-//     return groups;
 //   } catch (error) {
 //     console.error("Ошибка в groupByKeywords:", error);
 //     return [];
 //   }
 // }
+
+// // страый рабочий
+// //// Группировка по ключевым словам
+// // async function groupByKeywords(hosts) {
+// //   try {
+// //     // Получаем ID всех отфильтрованных хостов
+// //     const hostIds = hosts.map((host) => host.id);
+
+// //     if (!hostIds.length) {
+// //       return [];
+// //     }
+
+// //     // Используем raw SQL для получения уникальных ключевых слов с подсчетом хостов
+// //     const uniqueKeywordsSql = `
+// //       SELECT DISTINCT wk.key_name, COUNT(DISTINCT w.host_id) as count
+// //       FROM whois_keys wk
+// //       INNER JOIN whois w ON wk.id = w.key_id
+// //       WHERE w.host_id IN (:hostIds)
+// //       GROUP BY wk.key_name
+// //       ORDER BY wk.key_name ASC
+// //     `;
+
+// //     const uniqueKeywordsResult = await sequelize.query(uniqueKeywordsSql, {
+// //       replacements: { hostIds },
+// //       type: sequelize.QueryTypes.SELECT,
+// //     });
+
+// //     // Получаем полные WHOIS данные для хостов с группировкой по ключевым словам
+// //     const hostsWithWhois = await Host.findAll({
+// //       include: [
+// //         {
+// //           model: Port,
+// //           attributes: ["port", "type"],
+// //           include: [
+// //             {
+// //               model: WellKnownPort,
+// //               attributes: ["name"],
+// //               required: false,
+// //             },
+// //           ],
+// //         },
+// //         {
+// //           model: Priority,
+// //           attributes: ["id", "name"],
+// //           required: false,
+// //         },
+// //         {
+// //           model: Grouping,
+// //           attributes: ["id", "name"],
+// //           required: false,
+// //         },
+// //         {
+// //           model: Country,
+// //           attributes: ["id", "name"],
+// //           required: false,
+// //         },
+// //         {
+// //           model: Whois,
+// //           attributes: ["value"],
+// //           include: [
+// //             {
+// //               model: WhoisKey,
+// //               attributes: ["key_name"],
+// //               required: false,
+// //             },
+// //           ],
+// //           required: false,
+// //         },
+// //       ],
+// //       where: {
+// //         id: { [Op.in]: hostIds },
+// //       },
+// //       order: [
+// //         ["priority_id", "DESC"],
+// //         ["updated_at", "DESC"],
+// //       ],
+// //     });
+
+// //     // Форматируем данные хостов (используем ту же функцию formatHostData)
+// //     const formattedHostsMap = new Map();
+// //     hostsWithWhois.forEach((host) => {
+// //       if (!formattedHostsMap.has(host.id)) {
+// //         formattedHostsMap.set(host.id, formatHostData(host));
+// //       }
+// //     });
+
+// //     // Инициализируем группы для всех уникальных ключевых слов
+// //     const keywordGroups = {};
+
+// //     uniqueKeywordsResult.forEach((row) => {
+// //       const keyword = row.key_name;
+// //       const count = parseInt(row.count);
+// //       keywordGroups[keyword] = {
+// //         keyword: keyword,
+// //         count: count,
+// //         items: [],
+// //       };
+// //     });
+
+// //     // Группируем хосты по ключевым словам через WHOIS данные
+// //     for (const host of hostsWithWhois) {
+// //       const formattedHost = formattedHostsMap.get(host.id);
+// //       const hostWhois = host.Whois || [];
+      
+// //       if (formattedHost && hostWhois.length > 0) {
+// //         for (const whois of hostWhois) {
+// //           const keyName = whois.WhoisKey?.key_name;
+
+// //           if (keyName && keywordGroups[keyName]) {
+// //             // Проверяем, что хост еще не добавлен в эту группу
+// //             const hostExists = keywordGroups[keyName].items.some(
+// //               (item) => item.id === formattedHost.id
+// //             );
+
+// //             if (!hostExists) {
+// //               keywordGroups[keyName].items.push(formattedHost);
+// //             }
+// //           }
+// //         }
+// //       }
+// //     }
+
+// //     // Сортируем хосты внутри каждой группы по приоритету и дате
+// //     Object.values(keywordGroups).forEach((group) => {
+// //       group.items.sort((a, b) => {
+// //         // Сначала сортируем по приоритету (DESC)
+// //         const priorityA = a.priority_info?.priority?.id || 0;
+// //         const priorityB = b.priority_info?.priority?.id || 0;
+
+// //         if (priorityB !== priorityA) {
+// //           return priorityB - priorityA;
+// //         }
+
+// //         // Если приоритеты одинаковые, сортируем по дате обновления
+// //         if (a.updated_at && b.updated_at) {
+// //           return new Date(b.updated_at) - new Date(a.updated_at);
+// //         }
+
+// //         return 0;
+// //       });
+// //     });
+
+// //     // Преобразуем в нужный формат и сортируем по возрастанию ключевых слов
+// //     const groups = Object.values(keywordGroups)
+// //       .filter((group) => group.items.length > 0)
+// //       .map((group) => {
+// //         const totalItemsInGroup = group.items.length;
+// //         const totalPagesInGroup = Math.ceil(totalItemsInGroup / 10); // 10 хостов на страницу внутри группы
+
+// //         return {
+// //           keyword: group.keyword,
+// //           count: group.count,
+// //           name: group.keyword, // Добавляем name для совместимости
+// //           items: group.items.slice(0, 10), // Первые 10 хостов для отображения
+// //           pagination: {
+// //             currentPage: 1,
+// //             totalPages: totalPagesInGroup,
+// //             totalItems: totalItemsInGroup,
+// //             hasNext: totalItemsInGroup > 10,
+// //             hasPrev: false,
+// //           },
+// //         };
+// //       })
+// //       .sort((a, b) => a.keyword.localeCompare(b.keyword));
+
+// //     return groups;
+// //   } catch (error) {
+// //     console.error("Ошибка в groupByKeywords:", error);
+// //     return [];
+// //   }
+// // }
+
+
 
 // // Группировка по наличию WHOIS
 // async function groupByWhois(hosts) {
@@ -3428,32 +2933,295 @@ app.get('/prioritys/group', getPriorityDetails);
 //   return groups;
 // }
 
-// //! Структура ответа:
-// // {
-// //   items: [ // Массив групп
-// //     {
-// //       port: 21, // или name, id в зависимости от типа группировки
-// //       count: 4584,
-// //       name: "ftp",
-// //       items: [ // Хосты в группе (первые 10 для отображения)
-// //         // ... данные хостов
-// //       ],
-// //       pagination: { // Внутренняя пагинация для хостов в группе
-// //         currentPage: 1,
-// //         totalPages: 459,
-// //         totalItems: 4584,
-// //         hasNext: true,
-// //         hasPrev: false
-// //       }
-// //     }
-// //   ],
-// //   pagination: { // Пагинация по группам
-// //     currentPage: 1,
-// //     totalPages: 3,
-// //     totalItems: 25,
-// //     hasNext: true,
-// //     hasPrev: false
-// //   },
-// //   type: "group",
-// //   field: "ports"
-// // }
+// // Функция для получения данных по группе с пагинацией
+// export const getGroupDetails = async (req, res) => {
+//   const { group, page = 1, limit = 10 } = req.query;
+//   const pageNum = Math.max(1, parseInt(page) || 1);
+//   const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
+//   const offset = (pageNum - 1) * limitNum;
+
+//   try {
+//     // Ищем группу по имени
+//     const groupData = await Grouping.findOne({
+//       where: { name: group },
+//       attributes: ["id", "name"],
+//       raw: true,
+//     });
+
+//     if (!groupData) {
+//       return res.status(404).json({ error: "Группа не найдена" });
+//     }
+
+//     // Получаем хосты для этой группы с пагинацией
+//     const hosts = await Host.findAll({
+//       include: [
+//         {
+//           model: Port,
+//           attributes: ["port", "type"],
+//           include: [
+//             {
+//               model: WellKnownPort,
+//               attributes: ["name"],
+//               required: false,
+//             },
+//           ],
+//         },
+//         {
+//           model: Priority,
+//           attributes: ["id", "name"],
+//           required: false,
+//         },
+//         {
+//           model: Country,
+//           attributes: ["id", "name"],
+//           required: false,
+//         },
+//         {
+//           model: Whois,
+//           attributes: ["value"],
+//           include: [
+//             {
+//               model: WhoisKey,
+//               attributes: ["key_name"],
+//               required: false,
+//             },
+//           ],
+//           required: false,
+//         },
+//       ],
+//       where: {
+//         grouping_id: groupData.id,
+//       },
+//       order: [
+//         ["priority_id", "DESC"],
+//         ["updated_at", "DESC"],
+//       ],
+//       limit: limitNum,
+//       offset: offset,
+//     });
+
+//     const formattedHosts = hosts.map(formatHostData);
+//     const totalItems = await Host.count({
+//       where: {
+//         grouping_id: groupData.id,
+//       },
+//     });
+
+//     const totalPages = Math.ceil(totalItems / limitNum);
+
+//     return res.json({
+//       items: {
+//         items: formattedHosts,
+//         name: groupData.name,
+//         pagination: {
+//           currentPage: pageNum,
+
+//           totalPages: totalPages,
+//           totalItems: totalItems,
+//           hasNext: pageNum < totalPages,
+//           hasPrev: pageNum > 1,
+//         },
+//       },
+
+//       pagination: {
+//         currentPage: pageNum,
+//         totalPages: totalPages,
+//         totalItems: totalItems,
+//         hasNext: pageNum < totalPages,
+//         hasPrev: pageNum > 1,
+//       },
+
+//       field: "groups",
+//       type: "group",
+//     });
+//   } catch (error) {
+//     console.error("Ошибка в getGroupDetails:", error);
+//     return res.status(500).json({ error: "Внутренняя ошибка сервера" });
+//   }
+// };
+
+// // Функция для получения данных по стране с пагинацией
+// export const getCountryDetails = async (req, res) => {
+//   const { country, page = 1, limit = 10 } = req.query;
+//   const pageNum = Math.max(1, parseInt(page) || 1);
+//   const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
+//   const offset = (pageNum - 1) * limitNum;
+
+//   try {
+//     // Ищем страну по имени
+//     const countryData = await Country.findOne({
+//       where: { name: country },
+//       attributes: ["id", "name"],
+//       raw: true,
+//     });
+
+//     if (!countryData) {
+//       return res.status(404).json({ error: "Страна не найдена" });
+//     }
+
+//     // Получаем хосты для этой страны с пагинацией
+//     const hosts = await Host.findAll({
+//       include: [
+//         {
+//           model: Port,
+//           attributes: ["port", "type"],
+//           include: [
+//             {
+//               model: WellKnownPort,
+//               attributes: ["name"],
+//               required: false,
+//             },
+//           ],
+//         },
+//         {
+//           model: Priority,
+//           attributes: ["id", "name"],
+//           required: false,
+//         },
+//         {
+//           model: Grouping,
+//           attributes: ["id", "name"],
+//           required: false,
+//         },
+//         {
+//           model: Whois,
+//           attributes: ["value"],
+//           include: [
+//             {
+//               model: WhoisKey,
+//               attributes: ["key_name"],
+//               required: false,
+//             },
+//           ],
+//           required: false,
+//         },
+//       ],
+//       where: {
+//         country_id: countryData.id,
+//       },
+//       order: [
+//         ["priority_id", "DESC"],
+//         ["updated_at", "DESC"],
+//       ],
+//       limit: limitNum,
+//       offset: offset,
+//     });
+
+//     const formattedHosts = hosts.map(formatHostData);
+//     const totalItems = await Host.count({
+//       where: {
+//         country_id: countryData.id,
+//       },
+//     });
+
+//     const totalPages = Math.ceil(totalItems / limitNum);
+
+//     return res.json({
+//       items: formattedHosts,
+//       pagination: {
+//         currentPage: pageNum,
+//         totalPages: totalPages,
+//         totalItems: totalItems,
+//         hasNext: pageNum < totalPages,
+//         hasPrev: pageNum > 1,
+//       },
+//       country: countryData.name,
+//     });
+//   } catch (error) {
+//     console.error("Ошибка в getCountryDetails:", error);
+//     return res.status(500).json({ error: "Внутренняя ошибка сервера" });
+//   }
+// };
+
+// // Функция для получения данных по приоритету с пагинацией
+// export const getPriorityDetails = async (req, res) => {
+//   const { priority, page = 1, limit = 10 } = req.query;
+//   const pageNum = Math.max(1, parseInt(page) || 1);
+//   const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
+//   const offset = (pageNum - 1) * limitNum;
+
+//   try {
+//     // Ищем приоритет по имени
+//     const priorityData = await Priority.findOne({
+//       where: { name: priority },
+//       attributes: ["id", "name"],
+//       raw: true,
+//     });
+
+//     if (!priorityData) {
+//       return res.status(404).json({ error: "Приоритет не найден" });
+//     }
+
+//     // Получаем хосты для этого приоритета с пагинацией
+//     const hosts = await Host.findAll({
+//       include: [
+//         {
+//           model: Port,
+//           attributes: ["port", "type"],
+//           include: [
+//             {
+//               model: WellKnownPort,
+//               attributes: ["name"],
+//               required: false,
+//             },
+//           ],
+//         },
+//         {
+//           model: Grouping,
+//           attributes: ["id", "name"],
+//           required: false,
+//         },
+//         {
+//           model: Country,
+//           attributes: ["id", "name"],
+//           required: false,
+//         },
+//         {
+//           model: Whois,
+//           attributes: ["value"],
+//           include: [
+//             {
+//               model: WhoisKey,
+//               attributes: ["key_name"],
+//               required: false,
+//             },
+//           ],
+//           required: false,
+//         },
+//       ],
+//       where: {
+//         priority_id: priorityData.id,
+//       },
+//       order: [
+//         ["priority_id", "DESC"],
+//         ["updated_at", "DESC"],
+//       ],
+//       limit: limitNum,
+//       offset: offset,
+//     });
+
+//     const formattedHosts = hosts.map(formatHostData);
+//     const totalItems = await Host.count({
+//       where: {
+//         priority_id: priorityData.id,
+//       },
+//     });
+
+//     const totalPages = Math.ceil(totalItems / limitNum);
+
+//     return res.json({
+//       items: formattedHosts,
+//       pagination: {
+//         currentPage: pageNum,
+//         totalPages: totalPages,
+//         totalItems: totalItems,
+//         hasNext: pageNum < totalPages,
+//         hasPrev: pageNum > 1,
+//       },
+//       priority: priorityData.name,
+//     });
+//   } catch (error) {
+//     console.error("Ошибка в getPriorityDetails:", error);
+//     return res.status(500).json({ error: "Внутренняя ошибка сервера" });
+//   }
+// };
