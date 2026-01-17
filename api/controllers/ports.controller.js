@@ -508,7 +508,7 @@ export const groupPort = async (req, res) => {
       pagination: {
         currentPage: pageNum,
         totalPages: firstGroupWithData.pagination.totalPages,
-        totalItems: firstGroupWithData.pagination.totalItems,
+        totalItems: filteredGroups.length,
         hasNext: pageNum < firstGroupWithData.pagination.totalPages,
         hasPrev: pageNum > 1,
         // Добавляем URL для следующей и предыдущей страниц с сохранением параметров фильтрации

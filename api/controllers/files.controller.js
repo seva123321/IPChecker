@@ -112,41 +112,41 @@ export default class FileController {
     }
   }
 
-  // async handleFilesIP(req, res) {
-  //   await this.handleFilesWithProgress(req, res, "txt", FileService.searchIP);
-  // }
   async handleFilesIP(req, res) {
-    try {
-      // Получаем clientId из запроса
-      const clientId = req.query.clientId || req.body.clientId;
-
-      if (!clientId) {
-        return res.status(400).json({
-          success: false,
-          error: "clientId не указан",
-        });
-      }
-
-      console.log(`🔄 Обработка файлов для сессии: ${clientId}`);
-
-      await this.handleFilesWithProgress(
-        req,
-        res,
-        "txt",
-        async (content, fileName, progressCallback) => {
-          return await FileService.searchIP(
-            content,
-            fileName,
-            progressCallback,
-            clientId // Передаем clientId
-          );
-        }
-      );
-    } catch (error) {
-      console.error("❌ Ошибка в handleFilesIP:", error);
-      res.status(500).json({ error: error.message });
-    }
+    await this.handleFilesWithProgress(req, res, "txt", FileService.searchIP);
   }
+  // async handleFilesIP(req, res) {
+  //   try {
+  //     // Получаем clientId из запроса
+  //     const clientId = req.query.clientId || req.body.clientId;
+
+  //     if (!clientId) {
+  //       return res.status(400).json({
+  //         success: false,
+  //         error: "clientId не указан",
+  //       });
+  //     }
+
+  //     console.log(`🔄 Обработка файлов для сессии: ${clientId}`);
+
+  //     await this.handleFilesWithProgress(
+  //       req,
+  //       res,
+  //       "txt",
+  //       async (content, fileName, progressCallback) => {
+  //         return await FileService.searchIP(
+  //           content,
+  //           fileName,
+  //           progressCallback,
+  //           clientId // Передаем clientId
+  //         );
+  //       }
+  //     );
+  //   } catch (error) {
+  //     console.error("❌ Ошибка в handleFilesIP:", error);
+  //     res.status(500).json({ error: error.message });
+  //   }
+  // }
 
   static async cleanupSession(sessionId) {
     try {
@@ -215,7 +215,7 @@ export default class FileController {
                 fileIndex,
                 fileName,
                 // total_hosts: totalHosts,
-                // totalFiles: req.files.length,
+                totalFiles: req.files.length,
                 timestamp: new Date().toISOString(),
               });
 
