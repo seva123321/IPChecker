@@ -10,6 +10,7 @@ export const GroupList = ({
   items,
   service,
   currentEndpoint,
+  groupingType,
   searchFilters = {}, // Получаем фильтры из SearchPanel
 }) => {
   // Используем состояние для хранения данных с пагинацией
@@ -57,21 +58,20 @@ export const GroupList = ({
         delete queryParams.dateRange // Удаляем объект dateRange
       }
 
-      console.log('Making request with params:', queryParams)
+      // console.log('Making request with params:', queryParams)
 
       const response = await service.getData(
         `${currentEndpoint}s/group`,
         queryParams
       )
 
-      console.log('Response received:', response)
+      // console.log('Response received:', response)
 
       // Проверяем структуру ответа
       if (!response.items || !Array.isArray(response.items)) {
         console.error('Invalid response structure:', response)
         return
       }
-
       // Находим соответствующий элемент в ответе
       const responseItem = response.items.find(
         (item) =>
@@ -112,7 +112,7 @@ export const GroupList = ({
           },
         }
 
-        console.log('Updated item:', updatedItems[itemIndex])
+        // console.log('Updated item:', updatedItems[itemIndex])
         return updatedItems
       })
     } catch (error) {

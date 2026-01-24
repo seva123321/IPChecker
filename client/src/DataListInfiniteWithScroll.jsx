@@ -2,6 +2,7 @@ import withInfiniteScroll from './hoc/withInfiniteScroll'
 
 const InfiniteList = ({ items, render, hasMore }) => {
   const data = items[0]?.items ?? items
+  // const data = reportData.items ?? items
 
   return (
     <>
@@ -26,3 +27,5 @@ const InfiniteList = ({ items, render, hasMore }) => {
 }
 
 export default withInfiniteScroll(InfiniteList)
+
+
