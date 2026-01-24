@@ -1492,6 +1492,366 @@ export default class FileService {
       throw error; // Пробрасываем ошибку для отката транзакции
     }
   }
+// files.service.js - добавьте эти методы
+
+// Метод для сканирования и обновления одного IP
+static async scanAndUpdateSingleIP(ip, config) {
+  try {
+    console.log(`🔍 Сканирование и обновление одного IP: ${ip}`)
+    
+    // 1. Сначала получаем текущие данные хоста из базы
+    const existingHost = await Host.findOne({
+      where: { ip: ip },
+      include: [
+        {
+          model: Priority,
+          attributes: ["id", "name"]
+        },
+        {
+          model: Grouping,
+          attributes: ["id", "name"]
+        },
+        {
+          model: Country,
+          attributes: ["id", "name"]
+        }
+      ]
+    })
+    
+    // Сохраняем существующие значения
+    const existingPriority = existingHost?.Priority
+    const existingGrouping = existingHost?.Grouping
+    const existingCountry = existingHost?.Country
+    
+    // 2. Проверяем, что IP не локальный
+    if (isLocalIp(ip)) {
+      return { 
+        success: false, 
+        error: "Локальный IP адрес",
+        existingData: existingHost ? {
+          priority: existingPriority,
+          grouping: existingGrouping,
+          country: existingCountry
+        } : null
+      }
+    }
+    
+    // 3. Проверяем доступность
+    const reachable = await checkReachability(ip, config.reachabilityTimeout)
+    console.log(`📡 IP ${ip} доступен: ${reachable}`)
+    
+    let portScanResult = { open: [], filtered: [] }
+    let whoisData = {}
+    
+    // 4. Получаем данные только для доступных хостов
+    if (reachable) {
+      try {
+        // Параллельно сканируем порты и получаем WHOIS
+        const [portResult, whoisResult] = await Promise.allSettled([
+          scanPortsSimple(ip).catch(() => ({ open: [], filtered: [] })),
+          this.getCachedWhois(ip).catch(() => ({}))
+        ])
+        
+        portScanResult = portResult.status === "fulfilled" 
+          ? portResult.value 
+          : { open: [], filtered: [] }
+        
+        whoisData = whoisResult.status === "fulfilled" 
+          ? whoisResult.value 
+          : {}
+        
+        console.log(`🔌 ${ip}: найдено ${portScanResult.open.length} открытых и ${portScanResult.filtered.length} фильтрованных портов`)
+        console.log(`📝 ${ip}: получено ${Object.keys(whoisData).length} WHOIS записей`)
+      } catch (scanError) {
+        console.error(`❌ Ошибка сканирования ${ip}:`, scanError)
+      }
+    }
+    
+    // 5. Подготавливаем данные для сохранения, включая существующие значения
+    const dbData = {
+      ip: ip,
+      reachable: reachable,
+      port_data: portScanResult,
+      whois: whoisData,
+      // Добавляем существующие данные из базы
+      existing_priority: existingPriority,
+      existing_grouping: existingGrouping,
+      existing_country: existingCountry
+    }
+    
+    // 6. Сохраняем данные в базу с передачей существующих значений
+    const result = await this.updateSingleIP(dbData, existingHost?.id)
+    
+    return {
+      success: true,
+      ip: ip,
+      reachable: reachable,
+      ports: portScanResult,
+      whoisCount: Object.keys(whoisData).length,
+      existingData: {
+        priority: existingPriority,
+        grouping: existingGrouping,
+        country: existingCountry
+      },
+      message: `IP ${ip} успешно обновлен`
+    }
+    
+  } catch (error) {
+    console.error(`❌ Ошибка при обновлении IP ${ip}:`, error)
+    return {
+      success: false,
+      error: error.message,
+      ip: ip
+    }
+  }
+}
+
+static async updateSingleIP(dbData, hostId = null) {
+  const transaction = await sequelize.transaction();
+  
+  try {
+    console.log(`🔄 Обновление одного IP: ${dbData.ip}`)
+    
+    const { 
+      ip, 
+      reachable, 
+      port_data, 
+      whois,
+      existing_priority,
+      existing_grouping,
+      existing_country
+    } = dbData
+    
+    // 1. Находим или создаем хост
+    let host;
+    if (hostId) {
+      host = await Host.findByPk(hostId, { transaction });
+    }
+    
+    if (!host) {
+      host = await Host.findOne({
+        where: { ip: ip },
+        transaction
+      });
+    }
+    
+    if (!host) {
+      // Создаем новый хост
+      host = await Host.create({
+        ip: ip,
+        reachable: Boolean(reachable),
+        updated_at: new Date(),
+        // Используем существующие значения или значения по умолчанию
+        priority_id: existing_priority?.id || null,
+        grouping_id: existing_grouping?.id || null,
+        country_id: existing_country?.id || null
+      }, { transaction });
+      console.log(`✅ Создан новый хост: ${ip}`);
+    } else {
+      // Обновляем существующий хост, сохраняем существующие значения
+      const updateData = {
+        reachable: Boolean(reachable),
+        updated_at: new Date()
+      };
+      
+      // Только если не null/undefined, сохраняем существующие значения
+      if (existing_priority !== undefined && existing_priority !== null) {
+        updateData.priority_id = existing_priority.id;
+      }
+      if (existing_grouping !== undefined && existing_grouping !== null) {
+        updateData.grouping_id = existing_grouping.id;
+      }
+      if (existing_country !== undefined && existing_country !== null) {
+        updateData.country_id = existing_country.id;
+      }
+      
+      await host.update(updateData, { transaction });
+      console.log(`🔄 Обновлен существующий хост: ${ip}`);
+    }
+    
+    // 2. Обработка портов
+    console.log(`   🔌 Обработка портов для ${ip}...`);
+    
+    // Удаляем старые порты
+    await Port.destroy({
+      where: { host_id: host.id },
+      transaction
+    });
+    
+    // Создаем новые порты
+    const portPromises = [];
+    
+    // Для открытых портов
+    const openPorts = Array.isArray(port_data?.open) ? port_data.open : [];
+    for (const port of openPorts) {
+      const portNumber = typeof port === "object" && port.port ? port.port : port;
+      portPromises.push(
+        Port.create({
+          host_id: host.id,
+          port: portNumber,
+          type: "open"
+        }, { transaction })
+      );
+    }
+    
+    // Для filtered портов
+    const filteredPorts = Array.isArray(port_data?.filtered) ? port_data.filtered : [];
+    for (const port of filteredPorts) {
+      const portNumber = typeof port === "object" && port.port ? port.port : port;
+      portPromises.push(
+        Port.create({
+          host_id: host.id,
+          port: portNumber,
+          type: "filtered"
+        }, { transaction })
+      );
+    }
+    
+    if (portPromises.length > 0) {
+      await Promise.all(portPromises);
+      console.log(`   ✅ Порты созданы: ${portPromises.length} записей`);
+    }
+    
+    // 3. Обработка WHOIS данных
+    console.log(`   📝 Обработка WHOIS данных для ${ip}...`);
+    
+    // Удаляем старые WHOIS записи
+    await Whois.destroy({
+      where: { host_id: host.id },
+      transaction
+    });
+    
+    // Получаем разрешенные ключи WHOIS
+    const allowedKeys = await WhoisKey.findAll({
+      attributes: ["key_name"],
+      transaction
+    });
+    
+    const allowedKeyNames = new Set(allowedKeys.map(k => k.key_name));
+    
+    // Создаем новые WHOIS записи
+    const whoisPromises = Object.entries(whois || {})
+      .filter(([key]) => allowedKeyNames.has(key))
+      .filter(([key, value]) => value !== null && value !== undefined && value !== "")
+      .map(async ([key, value]) => {
+        const [whoisKey] = await WhoisKey.findOrCreate({
+          where: { key_name: key },
+          defaults: { key_name: key },
+          transaction
+        });
+        
+        return Whois.create({
+          host_id: host.id,
+          key_id: whoisKey.id,
+          value: String(value)
+        }, { transaction });
+      });
+    
+    if (whoisPromises.length > 0) {
+      await Promise.all(whoisPromises);
+      console.log(`   ✅ WHOIS данные созданы: ${whoisPromises.length} записей`);
+    }
+    
+    // 4. Коммит транзакции
+    await transaction.commit();
+    console.log(`   ✅ Транзакция закоммичена для IP ${ip}`);
+    
+    return {
+      success: true,
+      hostId: host.id,
+      ip: ip,
+      priority_id: host.priority_id,
+      grouping_id: host.grouping_id,
+      country_id: host.country_id
+    };
+    
+  } catch (error) {
+    console.error(`❌ Ошибка при обновлении IP ${dbData.ip}:`, error);
+    
+    if (transaction) {
+      try {
+        await transaction.rollback();
+        console.log(`↩️ Транзакция откатана для IP ${dbData.ip}`);
+      } catch (rollbackError) {
+        console.error(`❌ Ошибка при откате транзакции:`, rollbackError);
+      }
+    }
+    
+    throw error;
+  }
+}
+
+// Метод для форматирования данных одного хоста
+static formatSingleHostData(host) {
+  if (!host) return null
+  
+  // Формируем данные портов
+  const portData = {
+    open: [],
+    filtered: [],
+    all: []
+  }
+  
+  if (host.Ports && host.Ports.length > 0) {
+    host.Ports.forEach((port) => {
+      const portInfo = {
+        port: port.port,
+        service: port.WellKnownPort ? port.WellKnownPort.name : null,
+        protocol: "tcp"
+      }
+      
+      if (port.type === "open") {
+        portData.open.push(portInfo)
+      } else if (port.type === "filtered") {
+        portData.filtered.push(portInfo)
+      }
+      portData.all.push(portInfo)
+    })
+  }
+  
+  // Формируем данные WHOIS
+  const whoisObject = {}
+  if (host.Whois && host.Whois.length > 0) {
+    host.Whois.forEach((whois) => {
+      if (whois.WhoisKey && whois.WhoisKey.key_name) {
+        whoisObject[whois.WhoisKey.key_name] = whois.value
+      }
+    })
+  }
+  
+  // Форматируем данные как в useItemData
+  return {
+    id: host.id,
+    ip: host.ip,
+    reachable: host.reachable !== undefined ? host.reachable : false,
+    updated_at: host.updated_at,
+    port_data: portData,
+    priority_info: {
+      priority: host.Priority ? {
+        id: host.Priority.id,
+        name: host.Priority.name
+      } : null,
+      grouping: host.Grouping ? {
+        id: host.Grouping.id,
+        name: host.Grouping.name
+      } : null,
+      country: host.Country ? {
+        id: host.Country.id,
+        name: host.Country.name
+      } : null,
+      comment: host.comment || null
+    },
+    has_whois: Object.keys(whoisObject).length > 0,
+    whois_count: Object.keys(whoisObject).length,
+    port_count: {
+      total: portData.all.length,
+      open: portData.open.length,
+      filtered: portData.filtered.length
+    },
+    whois: Object.keys(whoisObject).length > 0 ? whoisObject : undefined
+  }
+}
+
   // РАБОЧИЙ СТАРЫЙ Вспомогательный метод для обработки данных хоста
   // static async processHostData(
   //   hostData,
@@ -1836,33 +2196,44 @@ export default class FileService {
     return null;
   }
 
-  static async addedJSONoneObj(
-    fileContent,
-    externalTransaction = null,
-    fileName = null
-  ) {
-    const shouldCommit = !externalTransaction;
-    const transaction = externalTransaction || (await sequelize.transaction());
+static async addedJSONoneObj(
+  fileContent,
+  externalTransaction = null,
+  fileName = null
+) {
+  const shouldCommit = !externalTransaction;
+  const transaction = externalTransaction || (await sequelize.transaction());
 
-    try {
-      console.log(
-        `🔄 addedJSONoneObj: Начало обработки для IP ${fileContent.ip}, файл: "${fileName}"`
-      );
+  try {
+    console.log(
+      `🔄 addedJSONoneObj: Начало обработки для IP ${fileContent.ip}, файл: "${fileName}"`
+    );
 
-      const ip = fileContent.ip;
-      const reachable = fileContent.reachable;
-      const portData = fileContent.port_data || {};
-      const whoisData = fileContent.whois || {};
+    const ip = fileContent.ip;
+    const reachable = fileContent.reachable;
+    const portData = fileContent.port_data || {};
+    const whoisData = fileContent.whois || {};
 
-      if (!ip) {
-        throw new Error("IP адрес отсутствует в данных.");
-      }
+    if (!ip) {
+      throw new Error("IP адрес отсутствует в данных.");
+    }
 
-      console.log(
-        `   📊 Данные IP ${ip}: reachable=${reachable}, ports=${JSON.stringify(
-          portData
-        )}`
-      );
+    console.log(
+      `   📊 Данные IP ${ip}: reachable=${reachable}, ports=${JSON.stringify(
+        portData
+      )}`
+    );
+
+ // 1. Сначала находим существующий хост (если есть)
+    const existingHost = await Host.findOne({
+      where: { ip: ip },
+      transaction
+    });
+
+    // Сохраняем существующие значения
+    const existingPriorityId = existingHost?.priority_id;
+    const existingGroupingId = existingHost?.grouping_id;
+    const existingCountryId = existingHost?.country_id;
 
       // 1. Находим или создаем источник файла
       let fileSource = null;
@@ -1976,25 +2347,22 @@ export default class FileService {
       }
 
       // 2.1. Находим или создаем хост
-      console.log(`   🔍 Поиск/создание хоста: ${ip}`);
-      let host = await Host.findOne({
-        where: { ip: ip },
-        transaction,
-      });
+ console.log(`   🔍 Поиск/создание хоста: ${ip}`);
+    let host = existingHost;
 
-      if (!host) {
-        console.log(`   ➕ Создание нового хоста: ${ip}`);
-        host = await Host.create(
-          {
-            ip: ip,
-            reachable: Boolean(reachable),
-            updated_at: new Date(),
-            // Устанавливаем значения по умолчанию
-            grouping_id: defaultGrouping.id,
-            country_id: defaultCountry.id,
-          },
-          { transaction }
-        );
+    if (!host) {
+      console.log(`   ➕ Создание нового хоста: ${ip}`);
+      host = await Host.create(
+        {
+          ip: ip,
+          reachable: Boolean(reachable),
+          updated_at: new Date(),
+          // Устанавливаем значения по умолчанию или существующие
+          grouping_id: existingGroupingId || defaultGrouping.id,
+          country_id: existingCountryId || defaultCountry.id,
+        },
+        { transaction }
+      );
         console.log(
           `   ✅ Создан хост: ID=${host.id}, IP=${host.ip}, reachable=${host.reachable}`
         );
@@ -2003,15 +2371,15 @@ export default class FileService {
           `   🔄 Обновление существующего хоста: ID=${host.id}, IP=${host.ip}`
         );
         await host.update(
-          {
-            reachable: Boolean(reachable),
-            updated_at: new Date(),
-            // Обновляем значения по умолчанию если они не установлены
-            grouping_id: host.grouping_id || defaultGrouping.id,
-            country_id: host.country_id || defaultCountry.id,
-          },
-          { transaction }
-        );
+        {
+          reachable: Boolean(reachable),
+          updated_at: new Date(),
+          // Сохраняем существующие значения, если они есть
+          grouping_id: existingGroupingId || host.grouping_id || defaultGrouping.id,
+          country_id: existingCountryId || host.country_id || defaultCountry.id,
+        },
+        { transaction }
+      );
         console.log(
           `   ✅ Хост обновлен: ID=${host.id}, reachable=${host.reachable}`
         );
@@ -2213,6 +2581,383 @@ export default class FileService {
       );
     }
   }
+  // static async addedJSONoneObj(
+  //   fileContent,
+  //   externalTransaction = null,
+  //   fileName = null
+  // ) {
+  //   const shouldCommit = !externalTransaction;
+  //   const transaction = externalTransaction || (await sequelize.transaction());
+
+  //   try {
+  //     console.log(
+  //       `🔄 addedJSONoneObj: Начало обработки для IP ${fileContent.ip}, файл: "${fileName}"`
+  //     );
+
+  //     const ip = fileContent.ip;
+  //     const reachable = fileContent.reachable;
+  //     const portData = fileContent.port_data || {};
+  //     const whoisData = fileContent.whois || {};
+
+  //     if (!ip) {
+  //       throw new Error("IP адрес отсутствует в данных.");
+  //     }
+
+  //     console.log(
+  //       `   📊 Данные IP ${ip}: reachable=${reachable}, ports=${JSON.stringify(
+  //         portData
+  //       )}`
+  //     );
+
+  //     // 1. Находим или создаем источник файла
+  //     let fileSource = null;
+  //     if (fileName && typeof fileName === "string") {
+  //       console.log(`   📁 Поиск/создание источника файла: "${fileName}"`);
+
+  //       try {
+  //         const originalFileName = fileName
+  //           .replace(/%5B/g, "[")
+  //           .replace(/%5D/g, "]")
+  //           .replace(/%20/g, " ")
+  //           .replace(/%E2%80%94/g, "—");
+
+  //         console.log(
+  //           `   📁 Оригинальное имя файла: "${originalFileName}" (длина: ${originalFileName.length})`
+  //         );
+
+  //         // Проверяем, есть ли уже такой файл
+  //         const existingFile = await FileSource.findOne({
+  //           where: { name: originalFileName },
+  //           transaction,
+  //         });
+
+  //         if (existingFile) {
+  //           console.log(
+  //             `   ✅ Найден существующий FileSource: ID=${existingFile.id}, name="${existingFile.name}"`
+  //           );
+  //           fileSource = existingFile;
+
+  //           // ОБНОВЛЯЕМ updated_at при повторной загрузке файла
+  //           console.log(
+  //             `   🔄 Обновление поля updated_at для файла ID=${fileSource.id}`
+  //           );
+  //           await fileSource.update(
+  //             {
+  //               updated_at: new Date(),
+  //             },
+  //             { transaction }
+  //           );
+  //           console.log(
+  //             `   ✅ Файл обновлен: updated_at=${new Date().toISOString()}`
+  //           );
+  //         } else {
+  //           console.log(
+  //             `   ➕ Создание нового FileSource: "${originalFileName}"`
+  //           );
+  //           fileSource = await FileSource.create(
+  //             {
+  //               name: originalFileName,
+  //               encoding: "UTF-8",
+  //               uploaded_at: new Date(),
+  //               updated_at: new Date(), // И для нового файла тоже
+  //             },
+  //             { transaction }
+  //           );
+  //           console.log(
+  //             `   ✅ Создан FileSource: ID=${fileSource.id}, name="${fileSource.name}"`
+  //           );
+  //         }
+  //       } catch (fileError) {
+  //         console.error(
+  //           `   ❌ Ошибка при работе с FileSource "${fileName}":`,
+  //           fileError
+  //         );
+  //         if (shouldCommit) {
+  //           await transaction.rollback();
+  //         }
+  //         throw new Error(`Ошибка работы с файлом: ${fileError.message}`);
+  //       }
+  //     } else {
+  //       console.warn(`   ⚠️ fileName не указан или пустой: ${fileName}`);
+  //     }
+
+  //     // 2. Находим или создаем записи "Неопределено" для grouping и country
+  //     console.log(`   🔍 Поиск/создание записей "Неопределено"...`);
+
+  //     // Для группировки
+  //     let defaultGrouping = await Grouping.findOne({
+  //       where: { name: "Неопределено" },
+  //       transaction,
+  //     });
+
+  //     if (!defaultGrouping) {
+  //       defaultGrouping = await Grouping.create(
+  //         {
+  //           name: "Неопределено",
+  //         },
+  //         { transaction }
+  //       );
+  //       console.log(
+  //         `   ✅ Создана запись Grouping "Неопределено": ID=${defaultGrouping.id}`
+  //       );
+  //     }
+
+  //     // Для страны
+  //     let defaultCountry = await Country.findOne({
+  //       where: { name: "Неопределено" },
+  //       transaction,
+  //     });
+
+  //     if (!defaultCountry) {
+  //       defaultCountry = await Country.create(
+  //         {
+  //           name: "Неопределено",
+  //         },
+  //         { transaction }
+  //       );
+  //       console.log(
+  //         `   ✅ Создана запись Country "Неопределено": ID=${defaultCountry.id}`
+  //       );
+  //     }
+
+  //     // 2.1. Находим или создаем хост
+  //     console.log(`   🔍 Поиск/создание хоста: ${ip}`);
+  //     let host = await Host.findOne({
+  //       where: { ip: ip },
+  //       transaction,
+  //     });
+
+  //     if (!host) {
+  //       console.log(`   ➕ Создание нового хоста: ${ip}`);
+  //       host = await Host.create(
+  //         {
+  //           ip: ip,
+  //           reachable: Boolean(reachable),
+  //           updated_at: new Date(),
+  //           // Устанавливаем значения по умолчанию
+  //           grouping_id: defaultGrouping.id,
+  //           country_id: defaultCountry.id,
+  //         },
+  //         { transaction }
+  //       );
+  //       console.log(
+  //         `   ✅ Создан хост: ID=${host.id}, IP=${host.ip}, reachable=${host.reachable}`
+  //       );
+  //     } else {
+  //       console.log(
+  //         `   🔄 Обновление существующего хоста: ID=${host.id}, IP=${host.ip}`
+  //       );
+  //       await host.update(
+  //         {
+  //           reachable: Boolean(reachable),
+  //           updated_at: new Date(),
+  //           // Обновляем значения по умолчанию если они не установлены
+  //           grouping_id: host.grouping_id || defaultGrouping.id,
+  //           country_id: host.country_id || defaultCountry.id,
+  //         },
+  //         { transaction }
+  //       );
+  //       console.log(
+  //         `   ✅ Хост обновлен: ID=${host.id}, reachable=${host.reachable}`
+  //       );
+  //     }
+
+  //     // 4. Создаем связь между хостом и файлом
+  //     if (fileSource && host) {
+  //       console.log(
+  //         `   🔗 Создание связи Host ${host.id} ↔ FileSource ${fileSource.id}`
+  //       );
+
+  //       try {
+  //         // Проверяем, существует ли уже связь
+  //         const existingLink = await HostFileSource.findOne({
+  //           where: {
+  //             host_id: host.id,
+  //             file_source_id: fileSource.id,
+  //           },
+  //           transaction,
+  //         });
+
+  //         if (!existingLink) {
+  //           console.log(`   ➕ Создание новой связи...`);
+  //           const link = await HostFileSource.create(
+  //             {
+  //               host_id: host.id,
+  //               file_source_id: fileSource.id,
+  //               created_at: new Date(),
+  //             },
+  //             { transaction }
+  //           );
+  //           console.log(
+  //             `   ✅ Создана связь: ID=${link.id}, Host=${host.id}, FileSource=${fileSource.id}`
+  //           );
+  //         } else {
+  //           console.log(
+  //             `   ℹ️ Связь уже существует: Host ${host.id} ↔ FileSource ${fileSource.id} (ID: ${existingLink.id})`
+  //           );
+  //         }
+
+  //         // Проверим все связи этого хоста
+  //         const allLinks = await HostFileSource.findAll({
+  //           where: { host_id: host.id },
+  //           transaction,
+  //         });
+  //         console.log(
+  //           `   📋 У хоста ${host.id} всего связей с файлами: ${allLinks.length}`
+  //         );
+  //       } catch (linkError) {
+  //         console.error(`   ❌ Ошибка при создании связи:`, linkError);
+  //         console.error("   Детали ошибки:", linkError.stack);
+  //       }
+  //     } else {
+  //       console.warn(
+  //         `   ⚠️ Не удалось создать связь: host=${
+  //           host ? "есть" : "нет"
+  //         }, fileSource=${fileSource ? "есть" : "нет"}`
+  //       );
+  //     }
+
+  //     // 4. Обработка портов - ИСПРАВЛЯЕМ ОШИБКУ с undefined
+  //     console.log(`   🔌 Обработка портов для ${ip}...`);
+
+  //     // Удаляем старые порты для этого хоста
+  //     await Port.destroy({
+  //       where: { host_id: host.id },
+  //       transaction,
+  //     });
+
+  //     // Создаем новые порты
+  //     const portPromises = [];
+
+  //     // Для открытых портов - исправляем ошибку с undefined
+  //     const openPorts = Array.isArray(portData.open) ? portData.open : [];
+  //     console.log(`   🔌 Открытых портов: ${openPorts.length}`);
+  //     for (const port of openPorts) {
+  //       const portNumber =
+  //         typeof port === "object" && port.port ? port.port : port;
+  //       portPromises.push(
+  //         Port.create(
+  //           {
+  //             host_id: host.id,
+  //             port: portNumber,
+  //             type: "open",
+  //           },
+  //           { transaction }
+  //         )
+  //       );
+  //     }
+
+  //     // Для filtered портов
+  //     const filteredPorts = Array.isArray(portData.filtered)
+  //       ? portData.filtered
+  //       : [];
+  //     console.log(`   🔌 Фильтрованных портов: ${filteredPorts.length}`);
+  //     for (const port of filteredPorts) {
+  //       const portNumber =
+  //         typeof port === "object" && port.port ? port.port : port;
+  //       portPromises.push(
+  //         Port.create(
+  //           {
+  //             host_id: host.id,
+  //             port: portNumber,
+  //             type: "filtered",
+  //           },
+  //           { transaction }
+  //         )
+  //       );
+  //     }
+
+  //     if (portPromises.length > 0) {
+  //       await Promise.all(portPromises);
+  //       console.log(`   ✅ Порты созданы: ${portPromises.length} записей`);
+  //     }
+
+  //     // 5. Обработка WHOIS данных
+  //     console.log(`   📝 Обработка WHOIS данных для ${ip}...`);
+  //     const allowedKeys = await WhoisKey.findAll({
+  //       attributes: ["key_name"],
+  //       transaction,
+  //     });
+
+  //     const allowedKeyNames = new Set(allowedKeys.map((k) => k.key_name));
+  //     console.log(
+  //       `   📝 Разрешенные WHOIS ключи: ${Array.from(allowedKeyNames).join(
+  //         ", "
+  //       )}`
+  //     );
+
+  //     // Удаляем старые WHOIS записи
+  //     await Whois.destroy({
+  //       where: { host_id: host.id },
+  //       transaction,
+  //     });
+
+  //     const whoisPromises = Object.entries(whoisData)
+  //       .filter(([key]) => allowedKeyNames.has(key))
+  //       .filter(
+  //         ([key, value]) =>
+  //           value !== null && value !== undefined && value !== ""
+  //       )
+  //       .map(async ([key, value]) => {
+  //         const [whoisKey, created] = await WhoisKey.findOrCreate({
+  //           where: { key_name: key },
+  //           defaults: { key_name: key },
+  //           transaction,
+  //         });
+
+  //         return Whois.create(
+  //           {
+  //             host_id: host.id,
+  //             key_id: whoisKey.id,
+  //             value: String(value),
+  //           },
+  //           { transaction }
+  //         );
+  //       });
+
+  //     if (whoisPromises.length > 0) {
+  //       await Promise.all(whoisPromises);
+  //       console.log(
+  //         `   ✅ WHOIS данные созданы: ${whoisPromises.length} записей`
+  //       );
+  //     }
+
+  //     // 6. Коммит транзакции
+  //     if (shouldCommit) {
+  //       await transaction.commit();
+  //       console.log(`   ✅ Транзакция закоммичена для IP ${ip}`);
+  //     }
+
+  //     return {
+  //       success: true,
+  //       ip: ip,
+  //       hostId: host ? host.id : null,
+  //       fileSourceId: fileSource ? fileSource.id : null,
+  //       grouping_id: host.grouping_id,
+  //       country_id: host.country_id,
+  //     };
+  //   } catch (error) {
+  //     console.error(
+  //       `❌ Критическая ошибка в addedJSONoneObj для IP ${fileContent.ip}:`,
+  //       error
+  //     );
+  //     console.error("Stack:", error.stack);
+
+  //     if (shouldCommit && transaction) {
+  //       try {
+  //         await transaction.rollback();
+  //         console.log(`↩️ Транзакция откатана для IP ${fileContent.ip}`);
+  //       } catch (rollbackError) {
+  //         console.error(`❌ Ошибка при откате транзакции:`, rollbackError);
+  //       }
+  //     }
+
+  //     throw new Error(
+  //       `Ошибка при добавлении данных для IP ${fileContent.ip}: ` +
+  //         error.message
+  //     );
+  //   }
+  // }
 
   static formattedDataProcess(data) {
     return data.Hosts.map((host) => {
