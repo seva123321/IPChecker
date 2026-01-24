@@ -2,13 +2,22 @@ import { useCallback, useState } from 'react'
 import { initialSearchText } from '../../utils/constant'
 
 const useSearch = ({onSearch, setSearchParams}) => {
-  const [searchText, setSearchText] = useState(initialSearchText)
+  const [searchText, setSearchText] = useState({
+    ip: initialSearchText.ip || '',
+    port: initialSearchText.port || '',
+    keyword: initialSearchText.keyword || '',
+    portOpened: initialSearchText.portOpened || false,
+    portFiltered: initialSearchText.portFiltered || false,
+  })
 
   // Оптимизированные обработчики с использованием useCallback
   const updateField = useCallback((field, value) => {
     setSearchText((prev) => ({ ...prev, [field]: value }))
-    setSearchParams((prev) => ({ ...prev, [field]: value }))
-  }, [])
+    setSearchParams((prev) => ({ 
+      ...prev, 
+      [field]: value 
+    }))
+  }, [setSearchParams])
 
   const clearField = useCallback(
     (field) => {
@@ -18,15 +27,27 @@ const useSearch = ({onSearch, setSearchParams}) => {
   )
 
   const handleClearAll = useCallback(() => {
-    setSearchText(initialSearchText)
-    setSearchParams(initialSearchText)
+    setSearchText({
+      ip: '',
+      port: '',
+      keyword: '',
+      portOpened: false,
+      portFiltered: false,
+    })
+    setSearchParams({
+      ip: '',
+      port: '',
+      keyword: '',
+      portOpened: false,
+      portFiltered: false,
+    })
     onSearch('ip', {})
-  }, [onSearch])
+  }, [onSearch, setSearchParams])
 
   const handlePortChange = useCallback(
     (value) => {
       // Извлекаем только номер порта из строки "53 (dns)"
-      const portNumber = value.split(' ')[0]
+      const portNumber = value ? value.split(' ')[0] : ''
       updateField('port', portNumber)
     },
     [updateField]
@@ -34,7 +55,7 @@ const useSearch = ({onSearch, setSearchParams}) => {
 
   const handleKeywordChange = useCallback(
     (e) => {
-      updateField('keyword', e.target.value)
+      updateField('keyword', e.target.value || '')
     },
     [updateField]
   )
@@ -46,14 +67,14 @@ const useSearch = ({onSearch, setSearchParams}) => {
 
   const handleCheckboxChange = useCallback(
     (fieldName, e) => {
-      updateField(fieldName, e.target.checked)
+      updateField(fieldName, e.target.checked || false)
     },
     [updateField]
   )
   
   const handleInputChange = useCallback(
     (fieldName, e) => {
-      updateField(fieldName, e.target.value)
+      updateField(fieldName, e.target.value || '')
     },
     [updateField]
   )

@@ -31,7 +31,7 @@ export function PanelFilters({ onSearch, onGroup, service, setSearchParams }) {
       <ul className={cn.list}>
         <li className={cn.searchGroup}>
           <Input
-            value={searchText.ip}
+            value={searchText.ip || ''}
             placeholder="Поиск по IP"
             containerClass={{ width: 300 }}
             onChange={(e) => updateField('ip', e.target.value)}
@@ -39,14 +39,13 @@ export function PanelFilters({ onSearch, onGroup, service, setSearchParams }) {
             onClear={() => clearField('ip')}
           />
           <Button
-            onClick={() => onSearch('ip', { ip: searchText.ip })}
+            onClick={() => onSearch('ip', { ip: searchText.ip || '' })}
             className={cn.searchButton}
-            disabled={!searchText.ip.trim()}
+            disabled={!searchText.ip?.trim()}
           >
             Найти
           </Button>
           <Button
-            // onClick={() => onGroup('ip/group')}
             onClick={() => onSearch('ip')}
             className={cn.groupButton}
           >
@@ -57,7 +56,7 @@ export function PanelFilters({ onSearch, onGroup, service, setSearchParams }) {
           <div className={cn.portInputsContainer}>
             <SingleSelectDataList
               service={service}
-              value={searchText.port}
+              value={searchText.port || ''}
               onChange={handlePortChange}
               placeholder="Поиск по портам"
               fetchDataUrl="data"
@@ -69,7 +68,7 @@ export function PanelFilters({ onSearch, onGroup, service, setSearchParams }) {
               <Tooltip title="Открытые порты">
                 <label className={cn.checkboxLabel}>
                   <Checkbox
-                    checked={searchText.portOpened}
+                    checked={searchText.portOpened || false}
                     onChange={(e) => handleCheckboxChange('portOpened', e)}
                   />
                   Открытые
@@ -78,7 +77,7 @@ export function PanelFilters({ onSearch, onGroup, service, setSearchParams }) {
               <Tooltip title="Фильтрованные порты">
                 <label className={cn.checkboxLabel}>
                   <Checkbox
-                    checked={searchText.portFiltered}
+                    checked={searchText.portFiltered || false}
                     onChange={(e) => handleCheckboxChange('portFiltered', e)}
                   />
                   Фильтрованные
@@ -90,25 +89,23 @@ export function PanelFilters({ onSearch, onGroup, service, setSearchParams }) {
           <Button
             onClick={() =>
               onSearch('ports', {
-                port: searchText.port,
-                portOpened: searchText.portOpened,
-                portFiltered: searchText.portFiltered,
+                port: searchText.port || '',
+                portOpened: searchText.portOpened || false,
+                portFiltered: searchText.portFiltered || false,
               })
             }
             className={cn.searchButton}
-            disabled={!searchText.port.trim()}
+            disabled={!searchText.port?.trim()}
           >
             Найти
           </Button>
           <Button
             onClick={() =>
               onSearch('ports/group', {
-                // port: '',
-                portOpened: searchText.portOpened,
-                portFiltered: searchText.portFiltered,
+                portOpened: searchText.portOpened || false,
+                portFiltered: searchText.portFiltered || false,
               })
             }
-            // onClick={() => onGroup('ports/group')}
             className={cn.groupButton}
           >
             Группировать
@@ -116,7 +113,7 @@ export function PanelFilters({ onSearch, onGroup, service, setSearchParams }) {
         </li>
         <li className={cn.searchGroup}>
           <Input
-            value={searchText.keyword}
+            value={searchText.keyword || ''}
             placeholder="Поиск по ключевым словам"
             containerClass={{ width: 300 }}
             onChange={handleKeywordChange}
@@ -125,16 +122,15 @@ export function PanelFilters({ onSearch, onGroup, service, setSearchParams }) {
           />
           <Button
             onClick={() =>
-              onSearch('keywords', { keyword: searchText.keyword })
+              onSearch('keywords', { keyword: searchText.keyword || '' })
             }
             className={cn.searchButton}
-            disabled={!searchText.keyword.trim()}
+            disabled={!searchText.keyword?.trim()}
           >
             Найти
           </Button>
           <Button
             onClick={() => onSearch('keywords/group', {})}
-            // onClick={() => onGroup('keywords/group', {})}
             className={cn.groupButton}
           >
             Группировать

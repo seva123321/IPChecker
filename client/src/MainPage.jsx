@@ -157,7 +157,6 @@ export function MainPage({ service }) {
       }
 
       const data = await service.postData(endpoint, requestData)
-
       if (isLoadMore) {
         // Для подгрузки добавляем к существующим данным
         setReportData((prevData) => {
@@ -324,7 +323,12 @@ export function MainPage({ service }) {
           <TabsGroup
             tabs={tabs}
             onSearch={(params) =>
-              fetchSearchData('/data/group', params, true, false)
+              fetchSearchData(
+                '/data/group',
+                { ...params, groupingType: reportData?.field },
+                true,
+                false
+              )
             }
             searchParams={searchParams}
             setSearchParams={setSearchParams}

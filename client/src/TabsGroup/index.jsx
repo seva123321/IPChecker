@@ -78,7 +78,7 @@ const TabsGroup = ({
       groupValue: key,
     }
 
-    setSearchParams(newParams)
+    // setSearchParams(newParams)
     
     if (onSearch) {
       onSearch(newParams)
