@@ -4,9 +4,9 @@ import {
   postIpInfo,
   patchIpInfo,
 } from "../controllers/comment.controller.js";
-import { definingTableType } from "../controllers/common.controller.js";
+import { definingTableType, updateIpInfo } from "../controllers/common.controller.js";
 // import { getGrouping, getGroupsGrouping, getCountriesGrouping, getPrioritiesGrouping} from "../controllers/universalGroup.controller.js";
-import { getGrouping} from "../controllers/universalGroup.controller.js";
+import { getGrouping } from "../controllers/universalGroup.controller.js";
 import {  getInfo } from "../controllers/universalSearcher.controller.js";
 
 const router = express.Router();
@@ -27,6 +27,9 @@ router.post("/search", getInfo);
 
 // POST /data/group
 router.post("/group", getGrouping);
+
+// GET /data/ip-updated?ip=77.77.246.56
+router.get("/ip-updated", updateIpInfo);
 
 // router.get('/groups/group', getGroupsGrouping);
 // router.get('/countrys/group', getCountriesGrouping);
