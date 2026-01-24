@@ -51,3 +51,16 @@ export const decodeFileName = (fileName) => {
 export const generateClientId = () => {
   return `client_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
 }
+
+export  const checkInternetConnection = async() => {
+  const res = await fetch('https://www.google.com', { method: 'HEAD', mode: 'no-cors' })
+    .then(response => {
+      // console.log('Устройство подключено к интернету');
+      return true
+    })
+    .catch(error => {
+      // console.log('Нет интернет-соединения');
+      return false
+    });
+    return res
+}
