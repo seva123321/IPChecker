@@ -9,21 +9,8 @@ import {
 } from '../MultiSelectDataList'
 import DatePicker from '../DatePicker/DatePicker'
 import { Checkbox, Radio, Tooltip } from 'antd'
-import { initialDateRange } from '../utils/constant'
+import { initialDateRange, initialSearchText } from '../utils/constant'
 import { DownloadOutlined, ClearOutlined } from '@ant-design/icons'
-
-const defaultInputValues = {
-  ip: '',
-  portOpened: '',
-  portFiltered: '',
-  portOpenedInclude: '',
-  portFilteredInclude: '',
-  keyword: '',
-  priority: '',
-  group: '',
-  country: '',
-  whois: 'all',
-}
 
 const StyledRadio = styled(Radio)`
   .ant-radio-checked {
@@ -42,13 +29,15 @@ const StyledRadio = styled(Radio)`
   }
 `
 
-const SearchPanel = ({ service, onSearch, onGroup }) => {
-  const [searchValue, setSearchValue] = useState(defaultInputValues)
-  const [groupValue, setGroupValue] = useState('ip')
-  const [dateRange, setDateRange] = useState(initialDateRange)
+const SearchPanel = ({ service, onSearch, onGroup, setSearchParams }) => {
+  const [groupingType, setGroupingType] = useState('ip')
+    const [searchValue, setSearchValue] = useState(initialSearchText)
+    const [dateRange, setDateRange] = useState(initialDateRange)
 
   const updateSearchField = (field, value) => {
     setSearchValue((prev) => ({ ...prev, [field]: value }))
+    setSearchParams((prev) => ({ ...prev, [field]: value }))
+    console.log('updated')
   }
 
   const clearField = (field) => {
@@ -56,8 +45,9 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
   }
 
   const handleClearAll = async () => {
-    setSearchValue(defaultInputValues)
-    setGroupValue('ip') // Сброс radio к значению по умолчанию
+    setSearchValue(initialSearchText)
+    setSearchParams(initialSearchText)
+    setGroupingType('ip') // Сброс radio к значению по умолчанию
   }
 
   // Обработчики для MultiSelectDataList
@@ -70,11 +60,11 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
   }
 
   const handlePortOpenedIncludeChange = (e) => {
-    updateSearchField('portOpenedInclude', e.target.checked)
+    updateSearchField('isPortOpened', e.target.checked)
   }
 
   const handlePortFilteredIncludeChange = (e) => {
-    updateSearchField('portFilteredInclude', e.target.checked)
+    updateSearchField('isPortFiltered', e.target.checked)
   }
 
   const handlePriorityChange = (newValue) => {
@@ -102,7 +92,8 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
 
   // Обработчик изменения радио-кнопки типа группировки
   const handleCommonGroupChange = (e) => {
-    setGroupValue(e.target.value)
+    setGroupingType(e.target.value)
+    setSearchParams((prev) => ({ ...prev, groupingType: e.target.value }))
   }
 
   // Функция для подготовки данных для запроса
@@ -123,7 +114,7 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
     }
 
     // Добавляем поле группировки в зависимости от выбранного radio
-    requestData.groupingType = groupValue
+    requestData.groupingType = groupingType
 
     // Удаляем undefined значения
     Object.keys(requestData).forEach((key) => {
@@ -143,7 +134,7 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
   // Обработчик для кнопки "Найти"
   const handleSearch = async () => {
     const requestData = prepareRequestData()
-
+    // console.log('ОЧИСТИТЬ')
     try {
       // Вызываем колбэк из MainPage вместо прямого вызова API
       if (onSearch) {
@@ -160,7 +151,7 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
 
     try {
       // Указываем тип группировки из выбранного radio
-      requestData.groupingType = groupValue
+      // requestData.groupingType = groupValue
       // Вызываем колбэк из MainPage
       if (onGroup) {
         await onGroup(requestData)
@@ -183,7 +174,7 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
     data?.data?.map((el) => `${el.port} (${el.name})`) || []
 
   return (
-    <div className={cn.panel}>
+    <div className={cn.panel} role='form'>
       <div className={cn.actionsGroup}>
         <h2>Введите значение</h2>
         <Tooltip title="Сбросить все поля">
@@ -196,7 +187,7 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
       {/* Radio.Group для выбора типа группировки */}
       <Radio.Group
         onChange={handleCommonGroupChange}
-        value={groupValue}
+        value={groupingType}
         className={cn.groupRadioGroup}
       >
         <ul className={cn.list}>
@@ -261,7 +252,7 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
                 <Tooltip title="Открытые порты">
                   <label className={cn.checkboxLabel}>
                     <Checkbox
-                      checked={searchValue.portOpenedInclude}
+                      checked={searchValue.isPortOpened}
                       onChange={handlePortOpenedIncludeChange}
                     />
                     Открытые
@@ -270,7 +261,7 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
                 <Tooltip title="Фильтрованные порты">
                   <label className={cn.checkboxLabel}>
                     <Checkbox
-                      checked={searchValue.portFilteredInclude}
+                      checked={searchValue.isPortFiltered}
                       onChange={handlePortFilteredIncludeChange}
                     />
                     Фильтрованные
@@ -392,7 +383,7 @@ const SearchPanel = ({ service, onSearch, onGroup }) => {
         <Button onClick={handleGroup} className={cn.groupButton}>
           Группировать
         </Button>
-         {/* @TODO реализовать функционал */}
+        {/* @TODO реализовать функционал */}
         <Button size="small" className={cn.searchButton}>
           <DownloadOutlined /> Экспорт данных
         </Button>
