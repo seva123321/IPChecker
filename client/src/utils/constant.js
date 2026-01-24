@@ -1,6 +1,35 @@
-import dayjs from "dayjs";
+import dayjs from 'dayjs'
 
-export const initialDateRange = [dayjs().month(0).date(1), dayjs()];
+export const initialDateRange = [dayjs(-1).month(0).date(1), dayjs()]
+
+export const initialSearchText = {
+  ip: '',
+  isPortOpened: true,
+  isPortFiltered: true,
+  portOpened: '',
+  portFiltered: '',
+  keyword: '',
+  priority: '',
+  group: '',
+  country: '',
+  whois: 'all',
+  dateRange: {
+    startDate: initialDateRange[0],
+    endDate: initialDateRange[1],
+  },
+  groupingType:''
+  // groupingType: '',
+  // page: 1,
+  // limit: 10,
+}
+
+// export const initialSearchText = {
+//   ip: '',
+//   port: '',
+//   keyword: '',
+//   portOpened: true,
+//   portFiltered: false,
+// }
 
 export const itemsMock = [
   {
@@ -14,7 +43,9 @@ export const itemsMock = [
     ],
     updateTime: '2025-10-13 18:07:26',
     whoisData: [
-      {'# available at': 'https://www.arin.net/resources/registry/whois/tou/',},
+      {
+        '# available at': 'https://www.arin.net/resources/registry/whois/tou/',
+      },
       { NetRange: '74.125.0.0 - 74.125.255.255' },
       { CIDR: '74.125.0.0/16' },
       { NetName: 'GOOGLE' },
