@@ -65,6 +65,35 @@ const PriorityStatus = ({ priority, grouping, hostId, onUpdate }) => {
 
   const handleCommentChange = (e) => updateState({ comment: e.target.value })
   const handleBack = () => updateState({ currentStep: 'select' })
+  const renderInnerModal = {
+    select: (
+      <SelectStep
+        newPriority={state.newPriority}
+        onPriorityChange={handlePriorityChange}
+        groupingSelectValue={getGroupingSelectValue()}
+        onGroupingChange={handleGroupingChange}
+        onFocusGrouping={handleFetchGroupingOptions}
+        groupingOptions={state.groupingOptions}
+        comment={state.comment}
+        onCommentChange={handleCommentChange}
+        existingComment={state.existingComment}
+        onCancel={handleCancel}
+        onNext={handleNextStep}
+        loading={state.loading}
+      />
+    ),
+    confirm: (
+      <ConfirmStep
+        newPriority={state.newPriority}
+        groupingDisplayValue={getGroupingDisplayValue()}
+        comment={state.comment}
+        onBack={handleBack}
+        onCancel={handleCancel}
+        onSubmit={handleSubmit}
+        loading={state.loading}
+      />
+    ),
+  }
 
   return (
     <>
@@ -82,34 +111,7 @@ const PriorityStatus = ({ priority, grouping, hostId, onUpdate }) => {
         confirmLoading={state.loading}
         style={{ top: 20 }}
       >
-        {state.currentStep === 'select' && (
-          <SelectStep
-            newPriority={state.newPriority}
-            onPriorityChange={handlePriorityChange}
-            groupingSelectValue={getGroupingSelectValue()}
-            onGroupingChange={handleGroupingChange}
-            onFocusGrouping={handleFetchGroupingOptions}
-            groupingOptions={state.groupingOptions}
-            comment={state.comment}
-            onCommentChange={handleCommentChange}
-            existingComment={state.existingComment}
-            onCancel={handleCancel}
-            onNext={handleNextStep}
-            loading={state.loading}
-          />
-        )}
-
-        {state.currentStep === 'confirm' && (
-          <ConfirmStep
-            newPriority={state.newPriority}
-            groupingDisplayValue={getGroupingDisplayValue()}
-            comment={state.comment}
-            onBack={handleBack}
-            onCancel={handleCancel}
-            onSubmit={handleSubmit}
-            loading={state.loading}
-          />
-        )}
+        {renderInnerModal[state.currentStep]}
       </Modal>
     </>
   )
