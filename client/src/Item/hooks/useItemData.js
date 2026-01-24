@@ -77,6 +77,7 @@ export const useItemData = (initialItem) => {
 
   return {
     currentItem,
+    setCurrentItem,
     isWhoisOpen,
     whois,
     whoisLoaded,
