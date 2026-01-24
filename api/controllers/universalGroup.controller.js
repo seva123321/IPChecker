@@ -12,1403 +12,1755 @@ import {
   Country,
 } from "../models/index.js";
 
-// Вспомогательная функция для форматирования данных хоста
-const formatHostData = (host) => {
-  const openPorts = [];
-  const filteredPorts = [];
-  const openPortsSet = new Set();
-  const filteredPortsSet = new Set();
-
-  // console.log('host.Ports >> ', host.Ports)
-  if (host.Ports && Array.isArray(host.Ports)) {
-    host.Ports.forEach((port) => {
-      // console.log('port.WellKnownPort ', port.WellKnownPort)
-      const portInfo = {
-        port: port.port,
-        name: port.name || port.WellKnownPort?.dataValues.name  || null,
-        // name: port.name || null,
-      };
-      // console.log('portInfo >> ', portInfo)
-      if (port.type === "open" && !openPortsSet.has(port.port)) {
-        openPorts.push(portInfo);
-        openPortsSet.add(port.port);
-      } else if (port.type === "filtered" && !filteredPortsSet.has(port.port)) {
-        filteredPorts.push(portInfo);
-        filteredPortsSet.add(port.port);
+// Функция извлечения портов из JSON (унифицированная)
+const extractPortsFromJson = (portsJson) => {
+  const result = { open: [], filtered: [] };
+  
+  if (!portsJson) return result;
+  
+  try {
+    const ports = typeof portsJson === 'string' ? JSON.parse(portsJson) : portsJson;
+    
+    if (!Array.isArray(ports) || ports.length === 0) return result;
+    
+    for (let i = 0; i < ports.length; i++) {
+      const port = ports[i];
+      if (port && port.port && port.type) {
+        const portInfo = {
+          port: port.port,
+          name: port.port_name || null,
+        };
+        
+        if (port.type === "open") {
+          result.open.push(portInfo);
+        } else if (port.type === "filtered") {
+          result.filtered.push(portInfo);
+        }
       }
-    });
+    }
+  } catch (e) {
+    console.error("Error extracting ports:", e);
   }
-  // console.log('openPorts >> ', openPorts)
+  
+  return result;
+};
 
-  const hasWhois =
-    host.Whois && Array.isArray(host.Whois) && host.Whois.length > 0;
-
-  const priorityInfo = {
-    priority: null,
-    grouping: null,
-  };
-
-  // @TODO изменил Priority => priority county и grouping
-  if (host.priority_id || host.priority) {
-    priorityInfo.priority = {
-      id: host.priority_id || host.priority?.id,
-      name: host.priority?.name || "Unknown",
-    };
-  }
-
-  if (host.grouping_id || host.grouping) {
-    priorityInfo.grouping = {
-      id: host.grouping_id || host.grouping?.id,
-      name: host.grouping?.name || null,
-    };
-  }
-
-  // Добавляем информацию о стране
-  const countryInfo = host.country
-    ? {
-        id: host.country.id,
-        name: host.country.name,
-      }
-    : null;
-
-  return {
+// Универсальная функция форматирования данных хоста
+const formatHostFromRaw = (host) => {
+  const formatted = {
     id: host.id,
     ip: host.ip,
     reachable: host.reachable,
-    updated_at: host.updated_at
-      ? host.updated_at.toISOString().replace("T", " ").substring(0, 19)
-      : null,
-    port_data: {
-      open: openPorts,
-      filtered: filteredPorts,
+    updated_at: host.updated_at,
+    port_data: extractPortsFromJson(host.ports_json),
+    priority_info: {
+      priority: host.priority_id ? {
+        id: host.priority_id,
+        name: host.priority_name || "Unknown",
+      } : null,
+      grouping: host.grouping_id ? {
+        id: host.grouping_id,
+        name: host.grouping_name || null,
+      } : null,
     },
-    priority_info: priorityInfo,
-    country_info: countryInfo,
-    has_whois: hasWhois,
+    country_info: host.country_id ? {
+      id: host.country_id,
+      name: host.country_name || null,
+    } : null,
+    has_whois: !!host.has_whois,
   };
+  
+  // Удаляем служебные поля, если они есть
+  delete formatted.rn;
+  delete formatted.total_count;
+  
+  return formatted;
 };
 
-const getDataDefaultEmpty = (pageNum, groupingType) => ({
-  items: [],
-  pagination: {
-    currentPage: pageNum,
-    totalPages: 0,
-    totalItems: 0,
-    hasNext: false,
-    hasPrev: false,
-  },
-  type: "group",
-  field: groupingType,
-});
-
-// Вспомогательная функция для парсинга портов из строки
-const parsePortsFromString = (portString) => {
-  if (!portString) return [];
-  // Проверяем, является ли portString массивом
-  const values = Array.isArray(portString) ? portString : [portString];
-  const ports = [];
-  values.forEach((value) => {
-    if (typeof value === "string") {
-      const portMatch = value.match(/(\d+)/);
-      if (portMatch) {
-        const portNumber = parseInt(portMatch[1]);
-        if (portNumber >= 1 && portNumber <= 65535) {
-          ports.push(portNumber);
-        }
-      }
-    }
-  });
-  return [...new Set(ports)];
+// Вспомогательная функция для пагинации
+const paginate = (req) => {
+  const { page = 1, limit = 10 } = req.body || req.query;
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 10));
+  const offset = (pageNum - 1) * limitNum;
+  return { pageNum, limitNum, offset };
 };
 
-// Функция для получения ID приоритетов по названиям
-const getPriorityIdsFromNames = async (priorityNames) => {
-  if (!priorityNames) return [];
-  const names = Array.isArray(priorityNames) ? priorityNames : [priorityNames];
-  const priorities = await Priority.findAll({
-    attributes: ["id"],
-    where: {
-      name: { [Op.in]: names },
-    },
-    raw: true,
-  });
-  return priorities.map((p) => p.id);
+// Функция для извлечения номера порта из строки (например, "443 (https)")
+const extractPortFromString = (portString) => {
+  if (!portString) return null;
+  const match = portString.match(/^(\d+)/);
+  return match ? parseInt(match[1]) : null;
 };
 
-// Функция для получения ID групп по названиям
-const getGroupIdsFromNames = async (groupNames) => {
-  if (!groupNames) return [];
-  const names = Array.isArray(groupNames) ? groupNames : [groupNames];
-  const groups = await Grouping.findAll({
-    attributes: ["id"],
-    where: {
-      name: { [Op.in]: names },
-    },
-    raw: true,
-  });
-  return groups.map((g) => g.id);
+// Функция для извлечения имени порта из строки
+const extractPortNameFromString = (portString) => {
+  if (!portString) return null;
+  const match = portString.match(/\((.*?)\)$/);
+  return match ? match[1] : null;
 };
 
-// Функция для получения ID стран по названиям
-const getCountryIdsFromNames = async (countryNames) => {
-  if (!countryNames) return [];
-  const names = Array.isArray(countryNames) ? countryNames : [countryNames];
-  const countries = await Country.findAll({
-    attributes: ["id"],
-    where: {
-      name: { [Op.in]: names },
-    },
-    raw: true,
-  });
-  return countries.map((c) => c.id);
-};
-
-// Функция для парсинга строки портов с запятыми
-const parsePortsString = (portString) => {
-  if (!portString) return [];
-  if (Array.isArray(portString)) {
-    return parsePortsFromString(portString);
-  }
-  // Разделяем строку по запятым
-  const portStrings = portString.split(",").map((s) => s.trim());
-  const ports = [];
-  portStrings.forEach((str) => {
-    const portMatch = str.match(/(\d+)/);
-    if (portMatch) {
-      const portNumber = parseInt(portMatch[1]);
-      if (portNumber >= 1 && portNumber <= 65535) {
-        ports.push(portNumber);
-      }
-    }
-  });
-  return [...new Set(ports)];
-};
-
-// Функция для извлечения значений из MultiSelectDataList
-const extractValues = (input) => {
-  if (!input) return [];
-  if (Array.isArray(input)) return input;
-  if (typeof input === "string") {
-    // Разделяем по запятым и убираем пробелы
-    return input
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s);
-  }
-  return [];
-};
-
-// Основная функция группировки
+// Основная функция группировки (оптимизированная)
 export const getGrouping = async (req, res) => {
-  const {
-    ip,
-    portOpened,
-    portFiltered,
-    keyword,
-    priority,
-    group,
-    country,
-    whois,
-    groupingType = "port",
-    dateRange: { startDate, endDate } = {},
-    page = 1,
-    limit = 10,
-  } = req.body;
-
   try {
-    console.log("Получен запрос группировки:", req.body);
+    const {
+      groupingType = "port",
+      page = 1,
+      limit = 10,
+      groupValue,
+      ip,
+      portOpened,
+      portFiltered,
+      keyword,
+      priority,
+      group,
+      country,
+      whois,
+      dateRange,
+      ...otherFilters
+    } = req.body;
 
-    // Параметры пагинации
-    const pageNum = Math.max(1, parseInt(page) || 1);
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
-    const offset = (pageNum - 1) * limitNum;
-
-    let hostIds = new Set();
-
-    // 1. Фильтр по IP
-    if (ip) {
-      console.log("Фильтр по IP:", ip);
-      const ipQuery = `
-        SELECT id FROM hosts 
-        WHERE CAST(ip AS TEXT) ILIKE :ipPattern
-      `;
-      const ipHosts = await sequelize.query(ipQuery, {
-        replacements: {
-          ipPattern: `${ip}%`,
-        },
-        type: sequelize.QueryTypes.SELECT,
-        raw: true,
-      });
-
-      if (!ipHosts.length) {
-        return res.json(getDataDefaultEmpty(pageNum, groupingType));
-      }
-
-      ipHosts.forEach((host) => hostIds.add(host.id));
-      console.log(`После фильтра по IP: ${hostIds.size} хостов`);
-    }
-
-    // 2. Фильтр по дате
-    if (startDate || endDate) {
-      console.log("Фильтр по дате:", { startDate, endDate });
-      const dateWhere = {};
-      if (startDate) dateWhere[Op.gte] = new Date(startDate);
-      if (endDate) dateWhere[Op.lte] = new Date(endDate);
-
-      const dateHosts = await Host.findAll({
-        attributes: ["id"],
-        where:
-          hostIds.size > 0
-            ? {
-                id: Array.from(hostIds),
-                updated_at: dateWhere,
-              }
-            : { updated_at: dateWhere },
-        raw: true,
-      });
-
-      if (!dateHosts.length) {
-        return res.json(getDataDefaultEmpty(pageNum, groupingType));
-      }
-
-      const dateHostIds = new Set(dateHosts.map((h) => h.id));
-      hostIds =
-        hostIds.size > 0
-          ? new Set(Array.from(hostIds).filter((id) => dateHostIds.has(id)))
-          : dateHostIds;
-
-      console.log(`После фильтра по дате: ${hostIds.size} хостов`);
-    }
-
-    // 3. Фильтр по приоритету
-    if (priority) {
-      console.log("Фильтр по приоритету:", priority);
-      const priorityNames = extractValues(priority);
-      const priorityIds = await getPriorityIdsFromNames(priorityNames);
-
-      if (priorityIds.length > 0) {
-        const priorityHosts = await Host.findAll({
-          attributes: ["id"],
-          where:
-            hostIds.size > 0
-              ? {
-                  id: Array.from(hostIds),
-                  priority_id: priorityIds,
-                }
-              : {
-                  priority_id: priorityIds,
-                },
-          raw: true,
-        });
-
-        if (!priorityHosts.length) {
-          return res.json({
-            items: [],
-            pagination: {
-              currentPage: pageNum,
-              totalPages: 0,
-              totalItems: 0,
-              hasNext: false,
-              hasPrev: false,
-            },
-            type: "group",
-            field: groupingType,
-          });
-        }
-
-        const priorityHostIds = new Set(priorityHosts.map((h) => h.id));
-        hostIds =
-          hostIds.size > 0
-            ? new Set(
-                Array.from(hostIds).filter((id) => priorityHostIds.has(id))
-              )
-            : priorityHostIds;
-      }
-
-      console.log(`После фильтра по приоритету: ${hostIds.size} хостов`);
-    }
-
-    // 4. Фильтр по группировке
-    if (group) {
-      console.log("Фильтр по группировке:", group);
-      const groupNames = extractValues(group);
-      const groupIds = await getGroupIdsFromNames(groupNames);
-
-      if (groupIds.length > 0) {
-        const groupHosts = await Host.findAll({
-          attributes: ["id"],
-          where:
-            hostIds.size > 0
-              ? {
-                  id: Array.from(hostIds),
-                  grouping_id: groupIds,
-                }
-              : {
-                  grouping_id: groupIds,
-                },
-          raw: true,
-        });
-
-        if (!groupHosts.length) {
-          return res.json(getDataDefaultEmpty(pageNum, groupingType));
-        }
-
-        const groupHostIds = new Set(groupHosts.map((h) => h.id));
-        hostIds =
-          hostIds.size > 0
-            ? new Set(Array.from(hostIds).filter((id) => groupHostIds.has(id)))
-            : groupHostIds;
-      }
-
-      console.log(`После фильтра по группировке: ${hostIds.size} хостов`);
-    }
-
-    // 5. Фильтр по стране
-    if (country) {
-      console.log("Фильтр по стране:", country);
-      const countryNames = extractValues(country);
-      const countryIds = await getCountryIdsFromNames(countryNames);
-
-      if (countryIds.length > 0) {
-        const countryHosts = await Host.findAll({
-          attributes: ["id"],
-          where:
-            hostIds.size > 0
-              ? {
-                  id: Array.from(hostIds),
-                  country_id: countryIds,
-                }
-              : {
-                  country_id: countryIds,
-                },
-          raw: true,
-        });
-
-        if (!countryHosts.length) {
-          return res.json(getDataDefaultEmpty(pageNum, groupingType));
-        }
-
-        const countryHostIds = new Set(countryHosts.map((h) => h.id));
-        hostIds =
-          hostIds.size > 0
-            ? new Set(
-                Array.from(hostIds).filter((id) => countryHostIds.has(id))
-              )
-            : countryHostIds;
-      }
-
-      console.log(`После фильтра по стране: ${hostIds.size} хостов`);
-    }
-
-    // 6. Фильтр по наличию WHOIS данных
-    if (whois !== "all") {
-      console.log("Фильтр по наличию WHOIS:", whois);
-
-      if (whois === "withWhois") {
-        // Только с WHOIS
-        const whoisHosts = await Host.findAll({
-          attributes: ["id"],
-          include: [
-            {
-              model: Whois,
-              attributes: [],
-              required: true,
-            },
-          ],
-          where: hostIds.size > 0 ? { id: Array.from(hostIds) } : {},
-          raw: true,
-        });
-
-        if (!whoisHosts.length) {
-          return res.json(getDataDefaultEmpty(pageNum, groupingType));
-        }
-
-        const whoisHostIds = new Set(whoisHosts.map((h) => h.id));
-        hostIds =
-          hostIds.size > 0
-            ? new Set(Array.from(hostIds).filter((id) => whoisHostIds.has(id)))
-            : whoisHostIds;
-      } else if (whois === "noWhois") {
-        const noWhoisHosts = await Host.findAll({
-          attributes: ["id"],
-          include: [
-            {
-              model: Whois,
-              attributes: [],
-              required: false,
-            },
-          ],
-          where:
-            hostIds.size > 0
-              ? {
-                  id: Array.from(hostIds),
-                  "$Whois.id$": null,
-                }
-              : {
-                  "$Whois.id$": null,
-                },
-          raw: true,
-        });
-
-        if (!noWhoisHosts.length) {
-          return res.json(getDataDefaultEmpty(pageNum, groupingType));
-        }
-
-        const noWhoisHostIds = new Set(noWhoisHosts.map((h) => h.id));
-        hostIds =
-          hostIds.size > 0
-            ? new Set(
-                Array.from(hostIds).filter((id) => noWhoisHostIds.has(id))
-              )
-            : noWhoisHostIds;
-      }
-
-      console.log(`После фильтра по WHOIS: ${hostIds.size} хостов`);
-    }
-
-    // 7. Фильтр по ключевым словам
-    if (keyword) {
-      console.log("Фильтр по ключевым словам:", keyword);
-      const keywords = extractValues(keyword);
-
-      if (keywords.length > 0) {
-        const keywordPromises = keywords.map((kw) => {
-          const keywordSql = `
-            SELECT DISTINCT h.id
-            FROM hosts h
-            INNER JOIN whois w ON h.id = w.host_id
-            INNER JOIN whois_keys wk ON w.key_id = wk.id
-            WHERE (LOWER(w.value) LIKE LOWER(:keyword) 
-               OR LOWER(wk.key_name) LIKE LOWER(:keyword))
-               ${hostIds.size > 0 ? "AND h.id IN (:hostIds)" : ""}
-          `;
-          return sequelize.query(keywordSql, {
-            replacements: {
-              keyword: `%${kw}%`,
-              hostIds: hostIds.size > 0 ? Array.from(hostIds) : [],
-            },
-            type: sequelize.QueryTypes.SELECT,
-          });
-        });
-
-        const keywordResults = await Promise.all(keywordPromises);
-        const keywordHostIds = new Set();
-
-        keywordResults.forEach((result) => {
-          result.forEach((row) => keywordHostIds.add(row.id));
-        });
-
-        if (!keywordHostIds.size) {
-          return res.json(getDataDefaultEmpty(pageNum, groupingType));
-        }
-
-        hostIds =
-          hostIds.size > 0
-            ? new Set(
-                Array.from(hostIds).filter((id) => keywordHostIds.has(id))
-              )
-            : keywordHostIds;
-      }
-
-      console.log(`После фильтра по ключевым словам: ${hostIds.size} хостов`);
-    }
-
-    // 8. Фильтр по портам
-    if (portOpened || portFiltered) {
-      console.log("Фильтр по портам:", { portOpened, portFiltered });
-      const openedPorts = parsePortsString(portOpened);
-      const filteredPorts = parsePortsString(portFiltered);
-
-      let portWhereConditions = [];
-
-      if (openedPorts.length > 0) {
-        portWhereConditions.push({
-          port: openedPorts,
-          type: "open",
-        });
-      }
-
-      if (filteredPorts.length > 0) {
-        portWhereConditions.push({
-          port: filteredPorts,
-          type: "filtered",
-        });
-      }
-
-      if (portWhereConditions.length > 0) {
-        const portHosts = await Port.findAll({
-          attributes: ["host_id"],
-          where: {
-            [Op.or]: portWhereConditions,
-            ...(hostIds.size > 0 && { host_id: Array.from(hostIds) }),
-          },
-          raw: true,
-        });
-
-        if (!portHosts.length) {
-          return res.json(getDataDefaultEmpty(pageNum, groupingType));
-        }
-
-        const portHostIds = new Set(portHosts.map((p) => p.host_id));
-        hostIds =
-          hostIds.size > 0
-            ? new Set(Array.from(hostIds).filter((id) => portHostIds.has(id)))
-            : portHostIds;
-
-        console.log(`После фильтра по портам: ${hostIds.size} хостов`);
-      }
-    }
-
-    // Получаем отфильтрованные ID хостов
-    const finalHostIds = Array.from(hostIds);
-
-    if (!finalHostIds.length) {
-      return res.json(getDataDefaultEmpty(pageNum, groupingType));
-    }
-
-    console.log(
-      `Финальный отбор для группировки: ${finalHostIds.length} хостов`
-    );
-
-    // Получаем полные данные для отфильтрованных хостов
-    // const hosts = await Host.findAll({
-    //   include: [
-    //     {
-    //       model: Port,
-    //       attributes: ["port", "type"],
-    //       include: [
-    //         {
-    //           model: WellKnownPort,
-    //           attributes: ["name"],
-    //           required: false,
-    //         },
-    //       ],
-    //     },
-    //     {
-    //       model: Priority,
-    //       attributes: ["id", "name"],
-    //       required: false,
-    //     },
-    //     {
-    //       model: Grouping,
-    //       attributes: ["id", "name"],
-    //       required: false,
-    //     },
-    //     {
-    //       model: Country,
-    //       attributes: ["id", "name"],
-    //       required: false,
-    //     },
-    //     {
-    //       model: Whois,
-    //       attributes: ["value"],
-    //       include: [
-    //         {
-    //           model: WhoisKey,
-    //           attributes: ["key_name"],
-    //           required: false,
-    //         },
-    //       ],
-    //       required: false,
-    //     },
-    //   ],
-    //   where: { id: finalHostIds },
-    //   order: [
-    //     ["priority_id", "DESC"],
-    //     ["updated_at", "DESC"],
-    //   ],
-    // });
-
-    /*********************************** */
-
-    const hosts = await sequelize.query(`
-      SELECT
-        h.id,
-        h.ip,
-        h.reachable,
-        h.updated_at,
-        h.priority_id,
-        h.grouping_id,
-        h.country_id,
-
-        -- Данные о приоритете
-        p.id as "priority.id",
-        p.name as "priority.name",
-
-        -- Данные о группировке
-        g.id as "grouping.id",
-        g.name as "grouping.name",
-
-        -- Данные о стране
-        c.id as "country.id",
-        c.name as "country.name"
-
-      FROM hosts h
-
-      -- LEFT JOIN для приоритета
-      LEFT JOIN host_priorities p ON h.priority_id = p.id
-
-      -- LEFT JOIN для группировки
-      LEFT JOIN host_groupings g ON h.grouping_id = g.id
-
-      -- LEFT JOIN для страны
-      LEFT JOIN countries c ON h.country_id = c.id
-
-      WHERE h.id IN (:finalHostIds)
-
-      ORDER BY
-        h.priority_id DESC NULLS LAST,
-        h.updated_at DESC
-    `, {
-      replacements: { finalHostIds },
-      type: sequelize.QueryTypes.SELECT,
-      nest: true,
+    console.log('Полученные параметры:', { 
+      groupingType, 
+      groupValue, 
+      portOpened, 
+      portFiltered, 
+      keyword,
+      priority,
+      group,
+      country,
+      whois,
+      dateRange 
     });
 
-    // Затем отдельно получаем связанные данные
-    if (hosts.length > 0) {
-      const hostIds = hosts.map(h => h.id);
+    const { pageNum, limitNum, offset } = paginate(req);
 
-      // Получаем порты с well_known_ports - ИСПРАВЛЕННЫЙ ЗАПРОС
-      const ports = await sequelize.query(`
-        SELECT
-          p.host_id,
-          p.port,
-          p.type,
-          wkp.name as well_known_port_name
-        FROM ports p
-        LEFT JOIN well_known_ports wkp ON p.port = wkp.port
-        WHERE p.host_id IN (:hostIds)
-      `, {
-        replacements: { hostIds },
-        type: sequelize.QueryTypes.SELECT,
-        nest: false,  // Используем false для плоской структуры
-      });
+    // Базовый запрос для хостов с учетом фильтров
+    let whereConditions = [];
+    let replacements = {};
 
-      // console.log('ports >>> ', ports)
+    // Фильтр по IP
+    if (ip && ip.trim() !== '') {
+      whereConditions.push(`h.ip::text ILIKE :ipPattern`);
+      replacements.ipPattern = `${ip.trim()}%`;
+      console.log('Фильтр IP:', ip.trim());
+    }
 
-      // Получаем WHOIS данные
-      const whoisData = await sequelize.query(`
-        SELECT
-          w.host_id,
-          w.value,
-          wk.key_name as "WhoisKey.key_name"
-        FROM whois w
-        LEFT JOIN whois_keys wk ON w.key_id = wk.id
-        WHERE w.host_id IN (:hostIds)
-      `, {
-        replacements: { hostIds },
-        type: sequelize.QueryTypes.SELECT,
-        nest: true,
-      });
+    // Фильтр по дате
+    if (dateRange?.startDate || dateRange?.endDate) {
+      const dateConditions = [];
+      if (dateRange.startDate) {
+        dateConditions.push(`h.updated_at >= :startDate`);
+        replacements.startDate = dateRange.startDate;
+        console.log('Фильтр startDate:', dateRange.startDate);
+      }
+      if (dateRange.endDate) {
+        dateConditions.push(`h.updated_at <= :endDate`);
+        replacements.endDate = dateRange.endDate;
+        console.log('Фильтр endDate:', dateRange.endDate);
+      }
+      if (dateConditions.length > 0) {
+        whereConditions.push(`(${dateConditions.join(' AND ')})`);
+      }
+    }
 
-      // Группируем данные по host_id
-      const portsByHost = {};
-      ports.forEach(port => {
-        if (!portsByHost[port.host_id]) {
-          portsByHost[port.host_id] = [];
-        }
+    // Фильтр по приоритету
+    if (priority && priority.trim() !== '') {
+      const priorityNames = Array.isArray(priority) ? priority : [priority];
+      const cleanedPriorityNames = priorityNames.map(p => p.trim()).filter(p => p !== '');
+      if (cleanedPriorityNames.length > 0) {
+        whereConditions.push(`hp.name IN (:priorityNames)`);
+        replacements.priorityNames = cleanedPriorityNames;
+        console.log('Фильтр приоритета:', cleanedPriorityNames);
+      }
+    }
 
-        // Получаем имя порта из well_known_port_name
-        const portName = port.well_known_port_name || null;
+    // Фильтр по группе
+    if (group && group.trim() !== '') {
+      const groupNames = Array.isArray(group) ? group : [group];
+      const cleanedGroupNames = groupNames.map(g => g.trim()).filter(g => g !== '');
+      if (cleanedGroupNames.length > 0) {
+        whereConditions.push(`hg.name IN (:groupNames)`);
+        replacements.groupNames = cleanedGroupNames;
+        console.log('Фильтр группы:', cleanedGroupNames);
+      }
+    }
 
-        portsByHost[port.host_id].push({
-          port: port.port,
-          type: port.type,
-          name: portName  // Простое поле name с именем порта
+    // Фильтр по стране
+    if (country && country.trim() !== '') {
+      const countryNames = Array.isArray(country) ? country : [country];
+      const cleanedCountryNames = countryNames.map(c => c.trim()).filter(c => c !== '');
+      if (cleanedCountryNames.length > 0) {
+        whereConditions.push(`c.name IN (:countryNames)`);
+        replacements.countryNames = cleanedCountryNames;
+        console.log('Фильтр страны:', cleanedCountryNames);
+      }
+    }
+
+    // Фильтр по WHOIS - КОММЕНТАРИЙ: этот фильтр использует подзапросы EXISTS/NOT EXISTS
+    // и не требует JOIN таблиц в основном запросе
+    if (whois && whois !== 'all') {
+      if (whois === 'withWhois') {
+        whereConditions.push(`EXISTS (SELECT 1 FROM whois w WHERE w.host_id = h.id)`);
+        console.log('Фильтр WHOIS: только с whois');
+      } else if (whois === 'noWhois') {
+        whereConditions.push(`NOT EXISTS (SELECT 1 FROM whois w WHERE w.host_id = h.id)`);
+        console.log('Фильтр WHOIS: только без whois');
+      }
+    }
+
+    // Фильтр по ключевым словам
+    if (keyword && keyword.trim() !== '') {
+      const keywords = Array.isArray(keyword) ? keyword : [keyword];
+      const cleanedKeywords = keywords.map(k => k.trim()).filter(k => k !== '');
+      if (cleanedKeywords.length > 0) {
+        const keywordConditions = cleanedKeywords.map((kw, idx) => 
+          `(LOWER(w.value) LIKE LOWER(:keyword${idx}) OR LOWER(wk.key_name) LIKE LOWER(:keyword${idx}))`
+        );
+        whereConditions.push(`(${keywordConditions.join(' OR ')})`);
+        cleanedKeywords.forEach((kw, idx) => {
+          replacements[`keyword${idx}`] = `%${kw}%`;
         });
-      });
-      // console.log('portsByHost >>> ', portsByHost)
+        console.log('Фильтр ключевых слов:', cleanedKeywords);
+      }
+    }
 
-      const whoisByHost = {};
-      whoisData.forEach(whois => {
-        if (!whoisByHost[whois.host_id]) {
-          whoisByHost[whois.host_id] = [];
+    // Фильтр по портам - КОММЕНТАРИЙ: этот фильтр требует JOIN с таблицей ports
+    // в основном запросе, но в зависимости от типа группировки JOIN может быть уже добавлен
+    const portConditions = [];
+    
+    // Обработка порта Opened
+    if (portOpened && portOpened.trim() !== '') {
+      const openedPorts = Array.isArray(portOpened) ? portOpened : [portOpened];
+      openedPorts.forEach((portStr, idx) => {
+        if (portStr.trim() !== '') {
+          const portNum = extractPortFromString(portStr);
+          if (portNum !== null) {
+            portConditions.push(`(p.port = :openedPort${idx} AND p.type = 'open')`);
+            replacements[`openedPort${idx}`] = portNum;
+            console.log('Фильтр открытого порта:', portNum);
+          }
         }
-        whoisByHost[whois.host_id].push({
-          value: whois.value,
-          WhoisKey: whois['WhoisKey.key_name'] ? { key_name: whois['WhoisKey.key_name'] } : null
-        });
-      });
-
-      // Объединяем все данные
-      hosts.forEach(host => {
-        // Получаем все порты для хоста
-        const allPorts = portsByHost[host.id] || [];
-
-        // Разделяем порты по типам
-        const openPorts = allPorts.filter(p => p.type === 'open')
-          .map(p => ({ port: p.port, name: p.name }));
-
-        const filteredPorts = allPorts.filter(p => p.type === 'filtered')
-          .map(p => ({ port: p.port, name: p.name }));
-
-        // Сохраняем оригинальную структуру
-        host.Ports = allPorts;
-        host.Whois = whoisByHost[host.id] || [];
-
-        // Добавляем структурированные данные для вывода
-        host.port_data = {
-          open: openPorts,
-          filtered: filteredPorts
-        };
       });
     }
-    /*********************************** */
+    
+    // Обработка порта Filtered
+    if (portFiltered && portFiltered.trim() !== '') {
+      const filteredPorts = Array.isArray(portFiltered) ? portFiltered : [portFiltered];
+      filteredPorts.forEach((portStr, idx) => {
+        if (portStr.trim() !== '') {
+          const portNum = extractPortFromString(portStr);
+          if (portNum !== null) {
+            portConditions.push(`(p.port = :filteredPort${idx} AND p.type = 'filtered')`);
+            replacements[`filteredPort${idx}`] = portNum;
+            console.log('Фильтр фильтрованного порта:', portNum);
+          }
+        }
+      });
+    }
+    
+    if (portConditions.length > 0) {
+      whereConditions.push(`(${portConditions.join(' OR ')})`);
+    }
 
-    // console.log("hosts >>> ", hosts[34]);
+    // Формируем WHERE условие
+    const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+    console.log('Итоговое WHERE условие:', whereClause);
+    console.log('Replacements:', replacements);
 
-    // Форматируем данные хостов
-    const formattedHosts = hosts.map(formatHostData);
-
-    // Группируем данные по выбранному полю
-    const groupedData = await groupByField(
-      groupingType,
-      formattedHosts,
-      finalHostIds.length,
-      pageNum,
-      limitNum,
-      offset
-    );
-
-    // Общее количество групп для пагинации
-    const totalGroups = groupedData.length;
-    const totalPages = Math.ceil(totalGroups / limitNum);
-
-    // Применяем пагинацию к группам
-    const paginatedGroups = groupedData.slice(offset, offset + limitNum);
+    // В зависимости от типа группировки выполняем разные запросы
+    let result;
+    switch (groupingType) {
+      case 'port':
+        result = await groupByPort(whereClause, replacements, pageNum, limitNum, offset, groupValue, keyword, whois);
+        break;
+      case 'keyword':
+        result = await groupByKeyword(whereClause, replacements, pageNum, limitNum, offset, groupValue, portOpened, portFiltered);
+        break;
+      case 'priority':
+        result = await groupByPriority(whereClause, replacements, pageNum, limitNum, offset, groupValue, portOpened, portFiltered, keyword);
+        break;
+      case 'group':
+        result = await groupByHostGroup(whereClause, replacements, pageNum, limitNum, offset, groupValue, portOpened, portFiltered, keyword);
+        break;
+      case 'country':
+        result = await groupByCountry(whereClause, replacements, pageNum, limitNum, offset, groupValue, portOpened, portFiltered, keyword);
+        break;
+      case 'whois':
+        result = await groupByWhois(whereClause, replacements, pageNum, limitNum, offset, groupValue, portOpened, portFiltered, keyword);
+        break;
+      case 'ip':
+        result = await getAllHosts(whereClause, replacements, pageNum, limitNum, offset, groupValue);
+        break;
+      default:
+        result = await groupByPort(whereClause, replacements, pageNum, limitNum, offset, groupValue);
+    }
 
     return res.json({
-      items: groupedData,//paginatedGroups, @TODO IP fix
-      pagination: {
-        currentPage: pageNum,
-        totalPages: totalPages,
-        totalItems: totalGroups,
-        hasNext: pageNum < totalPages,
-        hasPrev: pageNum > 1,
-      },
+      items: result.items,
+      pagination: result.pagination,
       type: "group",
       field: groupingType,
+      tabs: result.tabs || [],
     });
+
   } catch (error) {
     console.error("Ошибка в getGrouping:", error);
     return res.status(500).json({ error: "Внутренняя ошибка сервера" });
   }
 };
 
-// Функция группировки по разным полям
-async function groupByField(field, hosts, totalHosts, page, limit, offset) {
-  switch (field) {
-    case "port":
-      return await groupByPorts(hosts, totalHosts);
-    case "priority":
-      return await groupByPriority(hosts);
-    case "group":
-      return await groupByHostGroup(hosts);
-    case "country":
-      return await groupByCountry(hosts);
-    case "ip":
-      return hosts;
-    case "keyword":
-      return await groupByKeywords(hosts);
-    case "whois":
-      return await groupByWhois(hosts);
-    default:
-      return await groupByPorts(hosts, totalHosts);
-  }
-}
-
 // Группировка по портам
-async function groupByPorts(hosts, totalHosts) {
-  const portMap = new Map();
-
-  // Собираем все уникальные порты из всех хостов
-  hosts.forEach((host) => {
-    // Открытые порты
-    if (host.port_data.open) {
-      host.port_data.open.forEach((port) => {
-        if (!portMap.has(port.port)) {
-          portMap.set(port.port, {
-            port: port.port,
-            name: port.name,
-            count: 0,
-            items: [],
-          });
-        }
-        const portGroup = portMap.get(port.port);
-        if (!portGroup.items.some((item) => item.id === host.id)) {
-          portGroup.items.push(host);
-          portGroup.count++;
-        }
-      });
-    }
-
-    // Фильтрованные порты
-    if (host.port_data.filtered) {
-      host.port_data.filtered.forEach((port) => {
-        if (!portMap.has(port.port)) {
-          portMap.set(port.port, {
-            port: port.port,
-            name: port.name,
-            count: 0,
-            items: [],
-          });
-        }
-        const portGroup = portMap.get(port.port);
-        if (!portGroup.items.some((item) => item.id === host.id)) {
-          portGroup.items.push(host);
-          portGroup.count++;
-        }
-      });
-    }
+async function groupByPort(whereClause, replacements, pageNum, limitNum, offset, groupValue, keyword, whois) {
+  console.log('groupByPort groupValue:', groupValue);
+  
+  // Создаем базовый запрос для табов
+  let tabsQuery = `
+    SELECT 
+      p.port as value,
+      wkp.name as name,
+      COUNT(DISTINCT h.id) as host_count
+    FROM hosts h
+    INNER JOIN ports p ON h.id = p.host_id
+    LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+  `;
+  
+  // Вместо сложной логики замены строк, будем собирать JOIN отдельно
+  let joins = [];
+  
+  // Добавляем JOIN для приоритета если нужно
+  if (whereClause.includes('hp.name') || whereClause.includes('priorityNames')) {
+    joins.push('LEFT JOIN host_priorities hp ON h.priority_id = hp.id');
+  }
+  
+  // Добавляем JOIN для группы если нужно
+  if (whereClause.includes('hg.name') || whereClause.includes('groupNames')) {
+    joins.push('LEFT JOIN host_groupings hg ON h.grouping_id = hg.id');
+  }
+  
+  // Добавляем JOIN для страны если нужно
+  if (whereClause.includes('c.name') || whereClause.includes('countryNames')) {
+    joins.push('LEFT JOIN countries c ON h.country_id = c.id');
+  }
+  
+  // Добавляем JOIN для ключевых слов если нужно
+  if (whereClause.includes('keyword') || whereClause.includes('wk.key_name') || whereClause.includes('w.value')) {
+    joins.push('LEFT JOIN whois w ON w.host_id = h.id');
+    joins.push('LEFT JOIN whois_keys wk ON w.key_id = wk.id');
+  }
+  
+  // Собираем полный запрос
+  let fullQuery = tabsQuery;
+  if (joins.length > 0) {
+    // Вставляем JOIN после FROM hosts h
+    const fromIndex = fullQuery.indexOf('FROM hosts h') + 'FROM hosts h'.length;
+    const beforePart = fullQuery.substring(0, fromIndex);
+    const afterPart = fullQuery.substring(fromIndex);
+    fullQuery = beforePart + '\n' + joins.join('\n') + afterPart;
+  }
+  
+  fullQuery += ` ${whereClause}\nGROUP BY p.port, wkp.name\nORDER BY p.port ASC`;
+  
+  console.log('Запрос для табов портов:', fullQuery);
+  
+  const tabs = await sequelize.query(fullQuery, {
+    replacements,
+    type: sequelize.QueryTypes.SELECT,
   });
 
-  // Преобразуем в массив и сортируем
-  const groups = Array.from(portMap.values())
-    .sort((a, b) => a.port - b.port)
-    .map((group) => ({
-      ...group,
-      // Внутренняя пагинация для хостов в группе (если нужно)
+  console.log('Табы портов:', tabs);
+
+  if (tabs.length === 0) {
+    return {
+      items: [],
       pagination: {
-        currentPage: 1,
-        totalPages: Math.ceil(group.items.length / 10),
-        totalItems: group.items.length,
-        hasNext: group.items.length > 10,
+        currentPage: pageNum,
+        totalPages: 0,
+        totalItems: 0,
+        hasNext: false,
         hasPrev: false,
       },
-      // Оставляем только первые 10 хостов для отображения
-      items: group.items.slice(0, 10),
-    }));
+      tabs: []
+    };
+  }
 
-  return groups;
+  // Если есть groupValue, используем его, иначе первый порт
+  const portNumber = groupValue ? extractPortFromString(groupValue) || groupValue : tabs[0].value;
+
+  if (groupValue) {
+    const existsInTabs = tabs.some(tab => tab.value == portNumber);
+    if (!existsInTabs) {
+      tabs.unshift({
+        value: portNumber,
+        name: extractPortNameFromString(groupValue) || null,
+        host_count: 0
+      });
+    }
+  }
+
+  // Основной запрос для хостов с указанным портом
+  // Сначала создаем базовый запрос для hosts_with_port
+  let hostsWithPortBase = `
+    SELECT DISTINCT h.id
+    FROM hosts h
+    INNER JOIN ports p ON h.id = p.host_id
+  `;
+  
+  // Добавляем JOIN для hosts_with_port
+  let hostsJoins = [];
+  
+  if (whereClause.includes('hp.name') || whereClause.includes('priorityNames')) {
+    hostsJoins.push('LEFT JOIN host_priorities hp ON h.priority_id = hp.id');
+  }
+  
+  if (whereClause.includes('hg.name') || whereClause.includes('groupNames')) {
+    hostsJoins.push('LEFT JOIN host_groupings hg ON h.grouping_id = hg.id');
+  }
+  
+  if (whereClause.includes('c.name') || whereClause.includes('countryNames')) {
+    hostsJoins.push('LEFT JOIN countries c ON h.country_id = c.id');
+  }
+  
+  if (whereClause.includes('keyword') || whereClause.includes('wk.key_name') || whereClause.includes('w.value')) {
+    hostsJoins.push('LEFT JOIN whois w ON w.host_id = h.id');
+    hostsJoins.push('LEFT JOIN whois_keys wk ON w.key_id = wk.id');
+  }
+  
+  // Собираем полный запрос hosts_with_port
+  let hostsWithPortQuery = hostsWithPortBase;
+  if (hostsJoins.length > 0) {
+    const fromIndex = hostsWithPortQuery.indexOf('FROM hosts h') + 'FROM hosts h'.length;
+    const beforePart = hostsWithPortQuery.substring(0, fromIndex);
+    const afterPart = hostsWithPortQuery.substring(fromIndex);
+    hostsWithPortQuery = beforePart + '\n' + hostsJoins.join('\n') + afterPart;
+  }
+  
+  // Создаем WHERE условие для hosts_with_port
+  let hostsWhereClause = whereClause;
+  if (whereClause) {
+    hostsWhereClause = `${whereClause} AND p.port = :portNumber`;
+  } else {
+    hostsWhereClause = `WHERE p.port = :portNumber`;
+  }
+  
+  hostsWithPortQuery += ` ${hostsWhereClause}`;
+  
+  const hostsQuery = `
+    WITH hosts_with_port AS (
+      ${hostsWithPortQuery}
+    ),
+    sorted_hosts AS (
+      SELECT 
+        h.id,
+        ROW_NUMBER() OVER (
+          ORDER BY 
+            CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+            h.priority_id DESC NULLS LAST,
+            h.updated_at DESC
+        ) as rn
+      FROM hosts h
+      WHERE h.id IN (SELECT id FROM hosts_with_port)
+    ),
+    paginated_hosts AS (
+      SELECT id FROM sorted_hosts
+      WHERE rn > :offset AND rn <= :offsetPlusLimit
+      ORDER BY rn
+    ),
+    host_details AS (
+      SELECT 
+        h.id,
+        h.ip,
+        h.reachable,
+        TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+        h.priority_id,
+        h.grouping_id,
+        h.country_id,
+        hp.name as priority_name,
+        hg.name as grouping_name,
+        c.name as country_name,
+        (
+          SELECT COALESCE(
+            json_agg(
+              json_build_object(
+                'port', p2.port,
+                'type', p2.type,
+                'port_name', wkp.name
+              )
+              ORDER BY p2.port
+            ),
+            '[]'::json
+          )
+          FROM ports p2
+          LEFT JOIN well_known_ports wkp ON p2.port = wkp.port
+          WHERE p2.host_id = h.id
+        ) as ports_json,
+        EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois,
+        sh.rn
+      FROM hosts h
+      INNER JOIN paginated_hosts ph ON h.id = ph.id
+      INNER JOIN sorted_hosts sh ON h.id = sh.id
+      LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+      LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+      LEFT JOIN countries c ON h.country_id = c.id
+    ),
+    total_count AS (
+      SELECT COUNT(*) as total_count
+      FROM hosts_with_port
+    )
+    SELECT 
+      hd.*,
+      tc.total_count
+    FROM host_details hd
+    CROSS JOIN total_count tc
+    ORDER BY hd.rn
+  `;
+
+  console.log('Запрос для хостов портов:', hostsQuery);
+  
+  const hostsReplacements = { 
+    ...replacements, 
+    portNumber, 
+    offset: offset, 
+    offsetPlusLimit: offset + limitNum 
+  };
+  
+  console.log('Replacements для хостов:', hostsReplacements);
+
+  const hosts = await sequelize.query(hostsQuery, {
+    replacements: hostsReplacements,
+    type: sequelize.QueryTypes.SELECT,
+  });
+
+  console.log('Найдено хостов:', hosts.length);
+
+  const totalItems = hosts.length > 0 ? parseInt(hosts[0]?.total_count || 0) : 0;
+  const totalPages = Math.ceil(totalItems / limitNum);
+  
+  const items = hosts.length > 0 
+    ? hosts.map(host => {
+        const formatted = formatHostFromRaw(host);
+        delete formatted.rn;
+        return formatted;
+      })
+    : [];
+
+  return {
+    items,
+    pagination: {
+      currentPage: pageNum,
+      totalPages: totalPages,
+      totalItems: totalItems,
+      hasNext: pageNum < totalPages,
+      hasPrev: pageNum > 1,
+    },
+    tabs
+  };
+}
+
+// Группировка по ключевым словам
+async function groupByKeyword(whereClause, replacements, pageNum, limitNum, offset, groupValue, portOpened, portFiltered) {
+  console.log('groupByKeyword groupValue:', groupValue);
+  
+  // Создаем базовый запрос для табов
+  let tabsQuery = `
+    SELECT 
+      wk.key_name as value,
+      COUNT(DISTINCT h.id) as host_count
+    FROM hosts h
+    INNER JOIN whois w ON h.id = w.host_id
+    INNER JOIN whois_keys wk ON w.key_id = wk.id
+  `;
+  
+  // Добавляем JOIN для портов, если они есть в фильтрах
+  let hasPortsJoin = false;
+  if (whereClause.includes('p.port') || whereClause.includes('openedPort') || whereClause.includes('filteredPort')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nINNER JOIN ports p ON h.id = p.host_id');
+    hasPortsJoin = true;
+  }
+  
+  // Добавляем JOIN для приоритета, группы и страны, если они есть
+  if (whereClause.includes('hp.name') || whereClause.includes('priority')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN host_priorities hp ON h.priority_id = hp.id');
+  }
+  
+  if (whereClause.includes('hg.name') || whereClause.includes('groupNames')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN host_groupings hg ON h.grouping_id = hg.id');
+  }
+  
+  if (whereClause.includes('c.name') || whereClause.includes('countryNames')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN countries c ON h.country_id = c.id');
+  }
+  
+  tabsQuery += ` ${whereClause}\nGROUP BY wk.key_name\nORDER BY wk.key_name ASC`;
+  
+  console.log('Запрос для табов ключевых слов:', tabsQuery);
+  
+  const tabs = await sequelize.query(tabsQuery, {
+    replacements,
+    type: sequelize.QueryTypes.SELECT,
+  });
+
+  console.log('Табы ключевых слов:', tabs);
+
+  if (tabs.length === 0) {
+    return {
+      items: [],
+      pagination: {
+        currentPage: pageNum,
+        totalPages: 0,
+        totalItems: 0,
+        hasNext: false,
+        hasPrev: false,
+      },
+      tabs: []
+    };
+  }
+
+  // Если есть groupValue, используем его, иначе первое ключевое слово
+  const keywordName = groupValue ? groupValue : tabs[0].value;
+
+  if (groupValue) {
+    const existsInTabs = tabs.some(tab => tab.value == keywordName);
+    if (!existsInTabs) {
+      tabs.unshift({
+        value: keywordName,
+        name: null,
+        host_count: 0
+      });
+    }
+  }
+
+  // Основной запрос для хостов
+  let hostsWhereClause = whereClause;
+  let hostsReplacements = { ...replacements, keywordName, offset, offsetPlusLimit: offset + limitNum };
+  
+  if (whereClause) {
+    hostsWhereClause = `${whereClause} AND wk.key_name = :keywordName`;
+  } else {
+    hostsWhereClause = `WHERE wk.key_name = :keywordName`;
+  }
+
+  const hostsQuery = `
+    WITH hosts_with_keyword AS (
+      SELECT DISTINCT h.id
+      FROM hosts h
+      INNER JOIN whois w ON h.id = w.host_id
+      INNER JOIN whois_keys wk ON w.key_id = wk.id
+      ${hostsWhereClause}
+    ),
+    sorted_hosts AS (
+      SELECT 
+        h.id,
+        ROW_NUMBER() OVER (
+          ORDER BY 
+            CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+            h.priority_id DESC NULLS LAST,
+            h.updated_at DESC
+        ) as rn
+      FROM hosts h
+      WHERE h.id IN (SELECT id FROM hosts_with_keyword)
+    ),
+    paginated_hosts AS (
+      SELECT id FROM sorted_hosts
+      WHERE rn > :offset AND rn <= :offsetPlusLimit
+      ORDER BY rn
+    ),
+    host_details AS (
+      SELECT 
+        h.id,
+        h.ip,
+        h.reachable,
+        TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+        h.priority_id,
+        h.grouping_id,
+        h.country_id,
+        hp.name as priority_name,
+        hg.name as grouping_name,
+        c.name as country_name,
+        (
+          SELECT COALESCE(
+            json_agg(
+              json_build_object(
+                'port', p.port,
+                'type', p.type,
+                'port_name', wkp.name
+              )
+              ORDER BY p.port
+            ),
+            '[]'::json
+          )
+          FROM ports p
+          LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+          WHERE p.host_id = h.id
+        ) as ports_json,
+        TRUE as has_whois,
+        sh.rn
+      FROM hosts h
+      INNER JOIN paginated_hosts ph ON h.id = ph.id
+      INNER JOIN sorted_hosts sh ON h.id = sh.id
+      LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+      LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+      LEFT JOIN countries c ON h.country_id = c.id
+    ),
+    total_count AS (
+      SELECT COUNT(*) as total_count
+      FROM hosts_with_keyword
+    )
+    SELECT 
+      hd.*,
+      tc.total_count
+    FROM host_details hd
+    CROSS JOIN total_count tc
+    ORDER BY hd.rn
+  `;
+
+  console.log('Запрос для хостов ключевых слов:', hostsQuery);
+  console.log('Replacements для хостов:', hostsReplacements);
+
+  const hosts = await sequelize.query(hostsQuery, {
+    replacements: hostsReplacements,
+    type: sequelize.QueryTypes.SELECT,
+  });
+
+  console.log('Найдено хостов:', hosts.length);
+
+  const totalItems = hosts.length > 0 ? parseInt(hosts[0]?.total_count || 0) : 0;
+  const totalPages = Math.ceil(totalItems / limitNum);
+  
+  const items = hosts.length > 0 
+    ? hosts.map(host => {
+        const formatted = formatHostFromRaw(host);
+        delete formatted.rn;
+        return formatted;
+      })
+    : [];
+
+  return {
+    items,
+    pagination: {
+      currentPage: pageNum,
+      totalPages: totalPages,
+      totalItems: totalItems,
+      hasNext: pageNum < totalPages,
+      hasPrev: pageNum > 1,
+    },
+    tabs
+  };
 }
 
 // Группировка по приоритету
-async function groupByPriority(hosts) {
-  const priorityMap = new Map();
-
-  hosts.forEach((host) => {
-    const priorityId = host.priority_info.priority?.id || 0;
-    const priorityName = host.priority_info.priority?.name || "Без приоритета";
-
-    if (!priorityMap.has(priorityId)) {
-      priorityMap.set(priorityId, {
-        id: priorityId,
-        name: priorityName,
-        count: 0,
-        items: [],
-      });
+async function groupByPriority(whereClause, replacements, pageNum, limitNum, offset, groupValue, portOpened, portFiltered, keyword) {
+  console.log('groupByPriority groupValue:', groupValue);
+  
+  // Создаем базовый запрос для табов
+  let tabsQuery = `
+    SELECT 
+      hp.name as value,
+      COUNT(DISTINCT h.id) as host_count
+    FROM hosts h
+    LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+  `;
+  
+  // Динамически добавляем JOIN для фильтров
+  if (whereClause.includes('p.port') || whereClause.includes('openedPort') || whereClause.includes('filteredPort')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nINNER JOIN ports p ON h.id = p.host_id');
+  }
+  
+  if (whereClause.includes('wk.key_name') || whereClause.includes('keyword')) {
+    tabsQuery = tabsQuery.includes('INNER JOIN ports p')
+      ? tabsQuery.replace('INNER JOIN ports p', 'INNER JOIN ports p\nLEFT JOIN whois w ON w.host_id = h.id\nLEFT JOIN whois_keys wk ON w.key_id = wk.id')
+      : tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN whois w ON w.host_id = h.id\nLEFT JOIN whois_keys wk ON w.key_id = wk.id');
+  }
+  
+  if (whereClause.includes('hg.name') || whereClause.includes('groupNames')) {
+    const hasPortsJoin = tabsQuery.includes('INNER JOIN ports p');
+    const hasWhoisJoin = tabsQuery.includes('LEFT JOIN whois w');
+    
+    if (hasWhoisJoin) {
+      tabsQuery = tabsQuery.replace('LEFT JOIN whois_keys wk', 'LEFT JOIN whois_keys wk\nLEFT JOIN host_groupings hg ON h.grouping_id = hg.id');
+    } else if (hasPortsJoin) {
+      tabsQuery = tabsQuery.replace('INNER JOIN ports p', 'INNER JOIN ports p\nLEFT JOIN host_groupings hg ON h.grouping_id = hg.id');
+    } else {
+      tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN host_groupings hg ON h.grouping_id = hg.id');
     }
-
-    const group = priorityMap.get(priorityId);
-    group.items.push(host);
-    group.count++;
+  }
+  
+  if (whereClause.includes('c.name') || whereClause.includes('countryNames')) {
+    const hasGroupJoin = tabsQuery.includes('LEFT JOIN host_groupings hg');
+    
+    if (hasGroupJoin) {
+      tabsQuery = tabsQuery.replace('LEFT JOIN host_groupings hg', 'LEFT JOIN host_groupings hg\nLEFT JOIN countries c ON h.country_id = c.id');
+    } else {
+      tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN countries c ON h.country_id = c.id');
+    }
+  }
+  
+  // Добавляем JOIN для whois, если фильтр whois есть
+  if (whereClause.includes('EXISTS (SELECT') || whereClause.includes('NOT EXISTS')) {
+    // Для фильтров EXISTS/NOT EXISTS JOIN не нужен в основном запросе
+  }
+  
+  tabsQuery += ` ${whereClause}\nGROUP BY hp.name\nORDER BY hp.name ASC`;
+  
+  console.log('Запрос для табов приоритетов:', tabsQuery);
+  
+  const tabs = await sequelize.query(tabsQuery, {
+    replacements,
+    type: sequelize.QueryTypes.SELECT,
   });
 
-  return Array.from(priorityMap.values())
-    .sort((a, b) => b.id - a.id) // Сортировка по убыванию приоритета
-    .map((group) => ({
-      ...group,
+  console.log('Табы приоритетов:', tabs);
+
+  if (tabs.length === 0) {
+    return {
+      items: [],
       pagination: {
-        currentPage: 1,
-        totalPages: Math.ceil(group.items.length / 10),
-        totalItems: group.items.length,
-        hasNext: group.items.length > 10,
+        currentPage: pageNum,
+        totalPages: 0,
+        totalItems: 0,
+        hasNext: false,
         hasPrev: false,
       },
-      items: group.items.slice(0, 10),
-    }));
-}
+      tabs: []
+    };
+  }
 
-// Группировка по группе хостов
-async function groupByHostGroup(hosts) {
-  const groupMap = new Map();
+  const priorityName = groupValue ? groupValue : tabs[0].value;
 
-  hosts.forEach((host) => {
-    const groupId = host.priority_info.grouping?.id || 0;
-    const groupName =
-      host.priority_info.grouping?.name || "Неопределенная группа";
-
-    if (!groupMap.has(groupId)) {
-      groupMap.set(groupId, {
-        id: groupId,
-        name: groupName,
-        count: 0,
-        items: [],
+  if (groupValue) {
+    const existsInTabs = tabs.some(tab => tab.value == priorityName);
+    if (!existsInTabs) {
+      tabs.unshift({
+        value: priorityName,
+        name: null,
+        host_count: 0
       });
     }
+  }
 
-    const group = groupMap.get(groupId);
-    group.items.push(host);
-    group.count++;
-  });
-
-  return Array.from(groupMap.values())
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((group) => ({
-      ...group,
-      pagination: {
-        currentPage: 1,
-        totalPages: Math.ceil(group.items.length / 10),
-        totalItems: group.items.length,
-        hasNext: group.items.length > 10,
-        hasPrev: false,
-      },
-      items: group.items.slice(0, 10),
-    }));
-}
-
-// Группировка по стране
-async function groupByCountry(hosts) {
-  const countryMap = new Map();
-
-  hosts.forEach((host) => {
-    const countryId = host.country_info?.id || 0;
-    const countryName = host.country_info?.name || "Неизвестная страна";
-
-    if (!countryMap.has(countryId)) {
-      countryMap.set(countryId, {
-        id: countryId,
-        name: countryName,
-        count: 0,
-        items: [],
-      });
+  // Основной запрос для хостов
+  // Сначала создаем базовый запрос для hosts_with_priority
+  let hostsWithPriorityQuery = `
+    SELECT DISTINCT h.id
+    FROM hosts h
+    LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+  `;
+  
+  // Динамически добавляем JOIN в hosts_with_priority
+  if (whereClause.includes('p.port') || whereClause.includes('openedPort') || whereClause.includes('filteredPort')) {
+    hostsWithPriorityQuery = hostsWithPriorityQuery.replace('FROM hosts h', 'FROM hosts h\nINNER JOIN ports p ON h.id = p.host_id');
+  }
+  
+  if (whereClause.includes('wk.key_name') || whereClause.includes('keyword')) {
+    hostsWithPriorityQuery = hostsWithPriorityQuery.includes('INNER JOIN ports p')
+      ? hostsWithPriorityQuery.replace('INNER JOIN ports p', 'INNER JOIN ports p\nLEFT JOIN whois w ON w.host_id = h.id\nLEFT JOIN whois_keys wk ON w.key_id = wk.id')
+      : hostsWithPriorityQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN whois w ON w.host_id = h.id\nLEFT JOIN whois_keys wk ON w.key_id = wk.id');
+  }
+  
+  if (whereClause.includes('hg.name') || whereClause.includes('groupNames')) {
+    const hasPortsJoin = hostsWithPriorityQuery.includes('INNER JOIN ports p');
+    const hasWhoisJoin = hostsWithPriorityQuery.includes('LEFT JOIN whois w');
+    
+    if (hasWhoisJoin) {
+      hostsWithPriorityQuery = hostsWithPriorityQuery.replace('LEFT JOIN whois_keys wk', 'LEFT JOIN whois_keys wk\nLEFT JOIN host_groupings hg ON h.grouping_id = hg.id');
+    } else if (hasPortsJoin) {
+      hostsWithPriorityQuery = hostsWithPriorityQuery.replace('INNER JOIN ports p', 'INNER JOIN ports p\nLEFT JOIN host_groupings hg ON h.grouping_id = hg.id');
+    } else {
+      hostsWithPriorityQuery = hostsWithPriorityQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN host_groupings hg ON h.grouping_id = hg.id');
     }
-
-    const group = countryMap.get(countryId);
-    group.items.push(host);
-    group.count++;
-  });
-
-  return Array.from(countryMap.values())
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((group) => ({
-      ...group,
-      pagination: {
-        currentPage: 1,
-        totalPages: Math.ceil(group.items.length / 10),
-        totalItems: group.items.length,
-        hasNext: group.items.length > 10,
-        hasPrev: false,
-      },
-      items: group.items.slice(0, 10),
-    }));
-}
-
-// Группировка по ключевым словам оптимизированный
-async function groupByKeywords(hosts) {
-  try {
-    if (!hosts || hosts.length === 0) {
-      return [];
+  }
+  
+  if (whereClause.includes('c.name') || whereClause.includes('countryNames')) {
+    const hasGroupJoin = hostsWithPriorityQuery.includes('LEFT JOIN host_groupings hg');
+    
+    if (hasGroupJoin) {
+      hostsWithPriorityQuery = hostsWithPriorityQuery.replace('LEFT JOIN host_groupings hg', 'LEFT JOIN host_groupings hg\nLEFT JOIN countries c ON h.country_id = c.id');
+    } else {
+      hostsWithPriorityQuery = hostsWithPriorityQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN countries c ON h.country_id = c.id');
     }
-
-    // Создаем Map для быстрого поиска хостов по ID
-    const hostsMap = new Map();
-    hosts.forEach(host => {
-      hostsMap.set(host.id, host);
-    });
-
-    // Получаем ID всех отфильтрованных хостов
-    const hostIds = hosts.map(host => host.id);
-
-    // Используем один SQL запрос для получения всех необходимых данных
-    const keywordDataSql = `
-      WITH host_keywords AS (
-        SELECT 
-          w.host_id,
-          wk.key_name,
-          COUNT(*) OVER (PARTITION BY wk.key_name) as total_count
-        FROM whois w
-        INNER JOIN whois_keys wk ON w.key_id = wk.id
-        WHERE w.host_id IN (:hostIds)
-        GROUP BY w.host_id, wk.key_name
-        ORDER BY wk.key_name ASC
-      )
+  }
+  
+  // Создаем WHERE условие для hosts_with_priority
+  let hostsWhereClause = whereClause;
+  if (whereClause) {
+    hostsWhereClause = `${whereClause} AND hp.name = :priorityName`;
+  } else {
+    hostsWhereClause = `WHERE hp.name = :priorityName`;
+  }
+  
+  hostsWithPriorityQuery += ` ${hostsWhereClause}`;
+  
+  const hostsQuery = `
+    WITH hosts_with_priority AS (
+      ${hostsWithPriorityQuery}
+    ),
+    sorted_hosts AS (
       SELECT 
-        key_name,
-        total_count,
-        ARRAY_AGG(host_id) as host_ids
-      FROM host_keywords
-      GROUP BY key_name, total_count
-      ORDER BY key_name ASC
-    `;
+        h.id,
+        ROW_NUMBER() OVER (
+          ORDER BY 
+            CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+            h.priority_id DESC NULLS LAST,
+            h.updated_at DESC
+        ) as rn
+      FROM hosts h
+      WHERE h.id IN (SELECT id FROM hosts_with_priority)
+    ),
+    paginated_hosts AS (
+      SELECT id FROM sorted_hosts
+      WHERE rn > :offset AND rn <= :offsetPlusLimit
+      ORDER BY rn
+    ),
+    host_details AS (
+      SELECT 
+        h.id,
+        h.ip,
+        h.reachable,
+        TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+        h.priority_id,
+        h.grouping_id,
+        h.country_id,
+        hp.name as priority_name,
+        hg.name as grouping_name,
+        c.name as country_name,
+        (
+          SELECT COALESCE(
+            json_agg(
+              json_build_object(
+                'port', p.port,
+                'type', p.type,
+                'port_name', wkp.name
+              )
+              ORDER BY p.port
+            ),
+            '[]'::json
+          )
+          FROM ports p
+          LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+          WHERE p.host_id = h.id
+        ) as ports_json,
+        EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois,
+        sh.rn
+      FROM hosts h
+      INNER JOIN paginated_hosts ph ON h.id = ph.id
+      INNER JOIN sorted_hosts sh ON h.id = sh.id
+      LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+      LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+      LEFT JOIN countries c ON h.country_id = c.id
+    ),
+    total_count AS (
+      SELECT COUNT(*) as total_count
+      FROM hosts_with_priority
+    )
+    SELECT 
+      hd.*,
+      tc.total_count
+    FROM host_details hd
+    CROSS JOIN total_count tc
+    ORDER BY hd.rn
+  `;
 
-    const keywordGroupsResult = await sequelize.query(keywordDataSql, {
-      replacements: { hostIds },
-      type: sequelize.QueryTypes.SELECT,
-    });
+  console.log('Запрос для хостов приоритетов:', hostsQuery);
+  
+  const hostsReplacements = { 
+    ...replacements, 
+    priorityName, 
+    offset: offset, 
+    offsetPlusLimit: offset + limitNum 
+  };
+  
+  console.log('Replacements для хостов:', hostsReplacements);
 
-    // Если нет данных WHOIS, возвращаем пустой массив
-    if (!keywordGroupsResult.length) {
-      return [];
-    }
+  const hosts = await sequelize.query(hostsQuery, {
+    replacements: hostsReplacements,
+    type: sequelize.QueryTypes.SELECT,
+  });
 
-    // Собираем группы
-    const groups = keywordGroupsResult.map(row => {
-      const keyword = row.key_name;
-      const totalCount = parseInt(row.total_count);
-      const hostIdArray = row.host_ids || [];
-      
-      // Получаем хосты для этой группы (первые 10)
-      const groupHosts = [];
-      const addedHostIds = new Set();
-      
-      for (const hostId of hostIdArray) {
-        if (groupHosts.length >= 10) break;
-        
-        const host = hostsMap.get(hostId);
-        if (host && !addedHostIds.has(hostId)) {
-          groupHosts.push(host);
-          addedHostIds.add(hostId);
-        }
-      }
-      
-      // Сортируем хосты внутри группы по приоритету и дате
-      groupHosts.sort((a, b) => {
-        const priorityA = a.priority_info?.priority?.id || 0;
-        const priorityB = b.priority_info?.priority?.id || 0;
-        
-        if (priorityB !== priorityA) {
-          return priorityB - priorityA;
-        }
-        
-        if (a.updated_at && b.updated_at) {
-          return new Date(b.updated_at) - new Date(a.updated_at);
-        }
-        
-        return 0;
-      });
+  console.log('Найдено хостов:', hosts.length);
 
-      const totalItemsInGroup = Math.min(totalCount, hostIdArray.length);
-      const totalPagesInGroup = Math.ceil(totalItemsInGroup / 10);
+  const totalItems = hosts.length > 0 ? parseInt(hosts[0]?.total_count || 0) : 0;
+  const totalPages = Math.ceil(totalItems / limitNum);
+  
+  const items = hosts.length > 0 
+    ? hosts.map(host => {
+        const formatted = formatHostFromRaw(host);
+        delete formatted.rn;
+        return formatted;
+      })
+    : [];
 
-      return {
-        keyword: keyword,
-        name: keyword,
-        count: totalCount,
-        items: groupHosts,
-        pagination: {
-          currentPage: 1,
-          totalPages: totalPagesInGroup,
-          totalItems: totalItemsInGroup,
-          hasNext: totalItemsInGroup > 10,
-          hasPrev: false,
-        },
-      };
-    });
-
-    // Фильтруем пустые группы и возвращаем результат
-    return groups.filter(group => group.items.length > 0);
-
-  } catch (error) {
-    console.error("Ошибка в groupByKeywords:", error);
-    return [];
-  }
+  return {
+    items,
+    pagination: {
+      currentPage: pageNum,
+      totalPages: totalPages,
+      totalItems: totalItems,
+      hasNext: pageNum < totalPages,
+      hasPrev: pageNum > 1,
+    },
+    tabs
+  };
 }
 
-// старый рабочий
-//// Группировка по ключевым словам
-// async function groupByKeywords(hosts) {
-//   try {
-//     // Получаем ID всех отфильтрованных хостов
-//     const hostIds = hosts.map((host) => host.id);
+// Группировка по группам хостов
+async function groupByHostGroup(whereClause, replacements, pageNum, limitNum, offset, groupValue, portOpened, portFiltered, keyword) {
+  console.log('groupByHostGroup groupValue:', groupValue);
+  
+  let tabsQuery = `
+    SELECT 
+      hg.name as value,
+      COUNT(DISTINCT h.id) as host_count
+    FROM hosts h
+    LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+  `;
+  
+  // Добавляем JOIN для фильтров
+  if (whereClause.includes('p.port') || whereClause.includes('openedPort') || whereClause.includes('filteredPort')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nINNER JOIN ports p ON h.id = p.host_id');
+  }
+  
+  if (whereClause.includes('wk.key_name') || whereClause.includes('keyword')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN whois w ON w.host_id = h.id\nLEFT JOIN whois_keys wk ON w.key_id = wk.id');
+  }
+  
+  if (whereClause.includes('hp.name') || whereClause.includes('priority')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN host_priorities hp ON h.priority_id = hp.id');
+  }
+  
+  if (whereClause.includes('c.name') || whereClause.includes('countryNames')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN countries c ON h.country_id = c.id');
+  }
+  
+  if (whereClause.includes('EXISTS (SELECT') || whereClause.includes('w2.host_id')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN whois w2 ON w2.host_id = h.id');
+  }
+  
+  tabsQuery += ` ${whereClause}\nGROUP BY hg.name\nORDER BY hg.name ASC`;
+  
+  console.log('Запрос для табов групп:', tabsQuery);
+  
+  const tabs = await sequelize.query(tabsQuery, {
+    replacements,
+    type: sequelize.QueryTypes.SELECT,
+  });
 
-//     if (!hostIds.length) {
-//       return [];
-//     }
+  console.log('Табы групп:', tabs);
 
-//     // Используем raw SQL для получения уникальных ключевых слов с подсчетом хостов
-//     const uniqueKeywordsSql = `
-//       SELECT DISTINCT wk.key_name, COUNT(DISTINCT w.host_id) as count
-//       FROM whois_keys wk
-//       INNER JOIN whois w ON wk.id = w.key_id
-//       WHERE w.host_id IN (:hostIds)
-//       GROUP BY wk.key_name
-//       ORDER BY wk.key_name ASC
-//     `;
-
-//     const uniqueKeywordsResult = await sequelize.query(uniqueKeywordsSql, {
-//       replacements: { hostIds },
-//       type: sequelize.QueryTypes.SELECT,
-//     });
-
-//     // Получаем полные WHOIS данные для хостов с группировкой по ключевым словам
-//     const hostsWithWhois = await Host.findAll({
-//       include: [
-//         {
-//           model: Port,
-//           attributes: ["port", "type"],
-//           include: [
-//             {
-//               model: WellKnownPort,
-//               attributes: ["name"],
-//               required: false,
-//             },
-//           ],
-//         },
-//         {
-//           model: Priority,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Grouping,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Country,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Whois,
-//           attributes: ["value"],
-//           include: [
-//             {
-//               model: WhoisKey,
-//               attributes: ["key_name"],
-//               required: false,
-//             },
-//           ],
-//           required: false,
-//         },
-//       ],
-//       where: {
-//         id: { [Op.in]: hostIds },
-//       },
-//       order: [
-//         ["priority_id", "DESC"],
-//         ["updated_at", "DESC"],
-//       ],
-//     });
-
-//     // Форматируем данные хостов (используем ту же функцию formatHostData)
-//     const formattedHostsMap = new Map();
-//     hostsWithWhois.forEach((host) => {
-//       if (!formattedHostsMap.has(host.id)) {
-//         formattedHostsMap.set(host.id, formatHostData(host));
-//       }
-//     });
-
-//     // Инициализируем группы для всех уникальных ключевых слов
-//     const keywordGroups = {};
-
-//     uniqueKeywordsResult.forEach((row) => {
-//       const keyword = row.key_name;
-//       const count = parseInt(row.count);
-//       keywordGroups[keyword] = {
-//         keyword: keyword,
-//         count: count,
-//         items: [],
-//       };
-//     });
-
-//     // Группируем хосты по ключевым словам через WHOIS данные
-//     for (const host of hostsWithWhois) {
-//       const formattedHost = formattedHostsMap.get(host.id);
-//       const hostWhois = host.Whois || [];
-      
-//       if (formattedHost && hostWhois.length > 0) {
-//         for (const whois of hostWhois) {
-//           const keyName = whois.WhoisKey?.key_name;
-
-//           if (keyName && keywordGroups[keyName]) {
-//             // Проверяем, что хост еще не добавлен в эту группу
-//             const hostExists = keywordGroups[keyName].items.some(
-//               (item) => item.id === formattedHost.id
-//             );
-
-//             if (!hostExists) {
-//               keywordGroups[keyName].items.push(formattedHost);
-//             }
-//           }
-//         }
-//       }
-//     }
-
-//     // Сортируем хосты внутри каждой группы по приоритету и дате
-//     Object.values(keywordGroups).forEach((group) => {
-//       group.items.sort((a, b) => {
-//         // Сначала сортируем по приоритету (DESC)
-//         const priorityA = a.priority_info?.priority?.id || 0;
-//         const priorityB = b.priority_info?.priority?.id || 0;
-
-//         if (priorityB !== priorityA) {
-//           return priorityB - priorityA;
-//         }
-
-//         // Если приоритеты одинаковые, сортируем по дате обновления
-//         if (a.updated_at && b.updated_at) {
-//           return new Date(b.updated_at) - new Date(a.updated_at);
-//         }
-
-//         return 0;
-//       });
-//     });
-
-//     // Преобразуем в нужный формат и сортируем по возрастанию ключевых слов
-//     const groups = Object.values(keywordGroups)
-//       .filter((group) => group.items.length > 0)
-//       .map((group) => {
-//         const totalItemsInGroup = group.items.length;
-//         const totalPagesInGroup = Math.ceil(totalItemsInGroup / 10); // 10 хостов на страницу внутри группы
-
-//         return {
-//           keyword: group.keyword,
-//           count: group.count,
-//           name: group.keyword, // Добавляем name для совместимости
-//           items: group.items.slice(0, 10), // Первые 10 хостов для отображения
-//           pagination: {
-//             currentPage: 1,
-//             totalPages: totalPagesInGroup,
-//             totalItems: totalItemsInGroup,
-//             hasNext: totalItemsInGroup > 10,
-//             hasPrev: false,
-//           },
-//         };
-//       })
-//       .sort((a, b) => a.keyword.localeCompare(b.keyword));
-
-//     return groups;
-//   } catch (error) {
-//     console.error("Ошибка в groupByKeywords:", error);
-//     return [];
-//   }
-// }
-
-
-
-// Группировка по наличию WHOIS
-async function groupByWhois(hosts) {
-  const withWhois = hosts.filter((h) => h.has_whois);
-  const withoutWhois = hosts.filter((h) => !h.has_whois);
-
-  const groups = [];
-
-  if (withWhois.length > 0) {
-    groups.push({
-      name: "С WHOIS данными",
-      count: withWhois.length,
-      items: withWhois.slice(0, 10),
+  if (tabs.length === 0) {
+    return {
+      items: [],
       pagination: {
-        currentPage: 1,
-        totalPages: Math.ceil(withWhois.length / 10),
-        totalItems: withWhois.length,
-        hasNext: withWhois.length > 10,
+        currentPage: pageNum,
+        totalPages: 0,
+        totalItems: 0,
+        hasNext: false,
         hasPrev: false,
       },
-    });
+      tabs: []
+    };
   }
 
-  if (withoutWhois.length > 0) {
-    groups.push({
-      name: "Без WHOIS данных",
-      count: withoutWhois.length,
-      items: withoutWhois.slice(0, 10),
+  const groupName = groupValue ? groupValue : tabs[0].value;
+
+  if (groupValue) {
+    const existsInTabs = tabs.some(tab => tab.value == groupName);
+    if (!existsInTabs) {
+      tabs.unshift({
+        value: groupName,
+        name: null,
+        host_count: 0
+      });
+    }
+  }
+
+  let hostsWhereClause = whereClause;
+  let hostsReplacements = { ...replacements, groupName, offset, offsetPlusLimit: offset + limitNum };
+  
+  if (whereClause) {
+    hostsWhereClause = `${whereClause} AND hg.name = :groupName`;
+  } else {
+    hostsWhereClause = `WHERE hg.name = :groupName`;
+  }
+
+  const hostsQuery = `
+    WITH hosts_with_group AS (
+      SELECT DISTINCT h.id
+      FROM hosts h
+      LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+      ${hostsWhereClause}
+    ),
+    sorted_hosts AS (
+      SELECT 
+        h.id,
+        ROW_NUMBER() OVER (
+          ORDER BY 
+            CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+            h.priority_id DESC NULLS LAST,
+            h.updated_at DESC
+        ) as rn
+      FROM hosts h
+      WHERE h.id IN (SELECT id FROM hosts_with_group)
+    ),
+    paginated_hosts AS (
+      SELECT id FROM sorted_hosts
+      WHERE rn > :offset AND rn <= :offsetPlusLimit
+      ORDER BY rn
+    ),
+    host_details AS (
+      SELECT 
+        h.id,
+        h.ip,
+        h.reachable,
+        TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+        h.priority_id,
+        h.grouping_id,
+        h.country_id,
+        hp.name as priority_name,
+        hg.name as grouping_name,
+        c.name as country_name,
+        (
+          SELECT COALESCE(
+            json_agg(
+              json_build_object(
+                'port', p.port,
+                'type', p.type,
+                'port_name', wkp.name
+              )
+              ORDER BY p.port
+            ),
+            '[]'::json
+          )
+          FROM ports p
+          LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+          WHERE p.host_id = h.id
+        ) as ports_json,
+        EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois,
+        sh.rn
+      FROM hosts h
+      INNER JOIN paginated_hosts ph ON h.id = ph.id
+      INNER JOIN sorted_hosts sh ON h.id = sh.id
+      LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+      LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+      LEFT JOIN countries c ON h.country_id = c.id
+    ),
+    total_count AS (
+      SELECT COUNT(*) as total_count
+      FROM hosts_with_group
+    )
+    SELECT 
+      hd.*,
+      tc.total_count
+    FROM host_details hd
+    CROSS JOIN total_count tc
+    ORDER BY hd.rn
+  `;
+
+  const hosts = await sequelize.query(hostsQuery, {
+    replacements: hostsReplacements,
+    type: sequelize.QueryTypes.SELECT,
+  });
+
+  const totalItems = hosts.length > 0 ? parseInt(hosts[0]?.total_count || 0) : 0;
+  const totalPages = Math.ceil(totalItems / limitNum);
+  
+  const items = hosts.length > 0 
+    ? hosts.map(host => {
+        const formatted = formatHostFromRaw(host);
+        delete formatted.rn;
+        return formatted;
+      })
+    : [];
+
+  return {
+    items,
+    pagination: {
+      currentPage: pageNum,
+      totalPages: totalPages,
+      totalItems: totalItems,
+      hasNext: pageNum < totalPages,
+      hasPrev: pageNum > 1,
+    },
+    tabs
+  };
+}
+
+// Группировка по странам
+async function groupByCountry(whereClause, replacements, pageNum, limitNum, offset, groupValue, portOpened, portFiltered, keyword) {
+  console.log('groupByCountry groupValue:', groupValue);
+  
+  let tabsQuery = `
+    SELECT 
+      c.name as value,
+      COUNT(DISTINCT h.id) as host_count
+    FROM hosts h
+    LEFT JOIN countries c ON h.country_id = c.id
+  `;
+  
+  // Добавляем JOIN для фильтров
+  if (whereClause.includes('p.port') || whereClause.includes('openedPort') || whereClause.includes('filteredPort')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nINNER JOIN ports p ON h.id = p.host_id');
+  }
+  
+  if (whereClause.includes('wk.key_name') || whereClause.includes('keyword')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN whois w ON w.host_id = h.id\nLEFT JOIN whois_keys wk ON w.key_id = wk.id');
+  }
+  
+  if (whereClause.includes('hp.name') || whereClause.includes('priority')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN host_priorities hp ON h.priority_id = hp.id');
+  }
+  
+  if (whereClause.includes('hg.name') || whereClause.includes('groupNames')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN host_groupings hg ON h.grouping_id = hg.id');
+  }
+  
+  if (whereClause.includes('EXISTS (SELECT') || whereClause.includes('w2.host_id')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN whois w2 ON w2.host_id = h.id');
+  }
+  
+  tabsQuery += ` ${whereClause}\nGROUP BY c.name\nORDER BY c.name ASC`;
+  
+  console.log('Запрос для табов стран:', tabsQuery);
+  
+  const tabs = await sequelize.query(tabsQuery, {
+    replacements,
+    type: sequelize.QueryTypes.SELECT,
+  });
+
+  console.log('Табы стран:', tabs);
+
+  if (tabs.length === 0) {
+    return {
+      items: [],
       pagination: {
-        currentPage: 1,
-        totalPages: Math.ceil(withoutWhois.length / 10),
-        totalItems: withoutWhois.length,
-        hasNext: withoutWhois.length > 10,
+        currentPage: pageNum,
+        totalPages: 0,
+        totalItems: 0,
+        hasNext: false,
         hasPrev: false,
       },
-    });
+      tabs: []
+    };
   }
 
-  return groups;
+  const countryName = groupValue ? groupValue : tabs[0].value;
+
+  if (groupValue) {
+    const existsInTabs = tabs.some(tab => tab.value == countryName);
+    if (!existsInTabs) {
+      tabs.unshift({
+        value: countryName,
+        name: null,
+        host_count: 0
+      });
+    }
+  }
+
+  let hostsWhereClause = whereClause;
+  let hostsReplacements = { ...replacements, countryName, offset, offsetPlusLimit: offset + limitNum };
+  
+  if (whereClause) {
+    hostsWhereClause = `${whereClause} AND c.name = :countryName`;
+  } else {
+    hostsWhereClause = `WHERE c.name = :countryName`;
+  }
+
+  const hostsQuery = `
+    WITH hosts_with_country AS (
+      SELECT DISTINCT h.id
+      FROM hosts h
+      LEFT JOIN countries c ON h.country_id = c.id
+      ${hostsWhereClause}
+    ),
+    sorted_hosts AS (
+      SELECT 
+        h.id,
+        ROW_NUMBER() OVER (
+          ORDER BY 
+            CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+            h.priority_id DESC NULLS LAST,
+            h.updated_at DESC
+        ) as rn
+      FROM hosts h
+      WHERE h.id IN (SELECT id FROM hosts_with_country)
+    ),
+    paginated_hosts AS (
+      SELECT id FROM sorted_hosts
+      WHERE rn > :offset AND rn <= :offsetPlusLimit
+      ORDER BY rn
+    ),
+    host_details AS (
+      SELECT 
+        h.id,
+        h.ip,
+        h.reachable,
+        TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+        h.priority_id,
+        h.grouping_id,
+        h.country_id,
+        hp.name as priority_name,
+        hg.name as grouping_name,
+        c.name as country_name,
+        (
+          SELECT COALESCE(
+            json_agg(
+              json_build_object(
+                'port', p.port,
+                'type', p.type,
+                'port_name', wkp.name
+              )
+              ORDER BY p.port
+            ),
+            '[]'::json
+          )
+          FROM ports p
+          LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+          WHERE p.host_id = h.id
+        ) as ports_json,
+        EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois,
+        sh.rn
+      FROM hosts h
+      INNER JOIN paginated_hosts ph ON h.id = ph.id
+      INNER JOIN sorted_hosts sh ON h.id = sh.id
+      LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+      LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+      LEFT JOIN countries c ON h.country_id = c.id
+    ),
+    total_count AS (
+      SELECT COUNT(*) as total_count
+      FROM hosts_with_country
+    )
+    SELECT 
+      hd.*,
+      tc.total_count
+    FROM host_details hd
+    CROSS JOIN total_count tc
+    ORDER BY hd.rn
+  `;
+
+  const hosts = await sequelize.query(hostsQuery, {
+    replacements: hostsReplacements,
+    type: sequelize.QueryTypes.SELECT,
+  });
+
+  const totalItems = hosts.length > 0 ? parseInt(hosts[0]?.total_count || 0) : 0;
+  const totalPages = Math.ceil(totalItems / limitNum);
+  
+  const items = hosts.length > 0 
+    ? hosts.map(host => {
+        const formatted = formatHostFromRaw(host);
+        delete formatted.rn;
+        return formatted;
+      })
+    : [];
+
+  return {
+    items,
+    pagination: {
+      currentPage: pageNum,
+      totalPages: totalPages,
+      totalItems: totalItems,
+      hasNext: pageNum < totalPages,
+      hasPrev: pageNum > 1,
+    },
+    tabs
+  };
+}
+
+// Группировка по WHOIS
+async function groupByWhois(whereClause, replacements, pageNum, limitNum, offset, groupValue, portOpened, portFiltered, keyword) {
+  console.log('groupByWhois groupValue:', groupValue);
+  
+  // Создаем табы для WHOIS
+  let tabsQuery = `
+    SELECT 
+      CASE 
+        WHEN EXISTS (SELECT 1 FROM whois w WHERE w.host_id = h.id) 
+        THEN 'С WHOIS данными'
+        ELSE 'Без WHOIS данных'
+      END as value,
+      COUNT(DISTINCT h.id) as host_count
+    FROM hosts h
+  `;
+  
+  // Добавляем JOIN для фильтров
+  if (whereClause.includes('p.port') || whereClause.includes('openedPort') || whereClause.includes('filteredPort')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nINNER JOIN ports p ON h.id = p.host_id');
+  }
+  
+  if (whereClause.includes('wk.key_name') || whereClause.includes('keyword')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN whois w2 ON w2.host_id = h.id\nLEFT JOIN whois_keys wk ON w2.key_id = wk.id');
+  }
+  
+  if (whereClause.includes('hp.name') || whereClause.includes('priority')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN host_priorities hp ON h.priority_id = hp.id');
+  }
+  
+  if (whereClause.includes('hg.name') || whereClause.includes('groupNames')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN host_groupings hg ON h.grouping_id = hg.id');
+  }
+  
+  if (whereClause.includes('c.name') || whereClause.includes('countryNames')) {
+    tabsQuery = tabsQuery.replace('FROM hosts h', 'FROM hosts h\nLEFT JOIN countries c ON h.country_id = c.id');
+  }
+  
+  tabsQuery += ` ${whereClause}
+    GROUP BY 
+      CASE 
+        WHEN EXISTS (SELECT 1 FROM whois w WHERE w.host_id = h.id) 
+        THEN 'С WHOIS данными'
+        ELSE 'Без WHOIS данных'
+      END
+    ORDER BY value ASC`;
+  
+  console.log('Запрос для табов WHOIS:', tabsQuery);
+  
+  const tabs = await sequelize.query(tabsQuery, {
+    replacements,
+    type: sequelize.QueryTypes.SELECT,
+  });
+
+  console.log('Табы WHOIS:', tabs);
+
+  if (tabs.length === 0) {
+    return {
+      items: [],
+      pagination: {
+        currentPage: pageNum,
+        totalPages: 0,
+        totalItems: 0,
+        hasNext: false,
+        hasPrev: false,
+      },
+      tabs: []
+    };
+  }
+
+  // Определяем, какой статус WHOIS использовать
+  const whoisStatus = groupValue || tabs[0].value;
+  const isWithWhois = whoisStatus === 'С WHOIS данными';
+
+  let hostsWhereClause = whereClause;
+  let hostsReplacements = { ...replacements, offset, offsetPlusLimit: offset + limitNum };
+  
+  if (isWithWhois) {
+    if (whereClause) {
+      hostsWhereClause = `${whereClause} AND EXISTS (SELECT 1 FROM whois w WHERE w.host_id = h.id)`;
+    } else {
+      hostsWhereClause = `WHERE EXISTS (SELECT 1 FROM whois w WHERE w.host_id = h.id)`;
+    }
+  } else {
+    if (whereClause) {
+      hostsWhereClause = `${whereClause} AND NOT EXISTS (SELECT 1 FROM whois w WHERE w.host_id = h.id)`;
+    } else {
+      hostsWhereClause = `WHERE NOT EXISTS (SELECT 1 FROM whois w WHERE w.host_id = h.id)`;
+    }
+  }
+
+  const hostsQuery = `
+    WITH hosts_with_whois_status AS (
+      SELECT DISTINCT h.id
+      FROM hosts h
+      ${hostsWhereClause}
+    ),
+    sorted_hosts AS (
+      SELECT 
+        h.id,
+        ROW_NUMBER() OVER (
+          ORDER BY 
+            CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+            h.priority_id DESC NULLS LAST,
+            h.updated_at DESC
+        ) as rn
+      FROM hosts h
+      WHERE h.id IN (SELECT id FROM hosts_with_whois_status)
+    ),
+    paginated_hosts AS (
+      SELECT id FROM sorted_hosts
+      WHERE rn > :offset AND rn <= :offsetPlusLimit
+      ORDER BY rn
+    ),
+    host_details AS (
+      SELECT 
+        h.id,
+        h.ip,
+        h.reachable,
+        TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+        h.priority_id,
+        h.grouping_id,
+        h.country_id,
+        hp.name as priority_name,
+        hg.name as grouping_name,
+        c.name as country_name,
+        (
+          SELECT COALESCE(
+            json_agg(
+              json_build_object(
+                'port', p.port,
+                'type', p.type,
+                'port_name', wkp.name
+              )
+              ORDER BY p.port
+            ),
+            '[]'::json
+          )
+          FROM ports p
+          LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+          WHERE p.host_id = h.id
+        ) as ports_json,
+        ${isWithWhois ? 'TRUE' : 'FALSE'} as has_whois,
+        sh.rn
+      FROM hosts h
+      INNER JOIN paginated_hosts ph ON h.id = ph.id
+      INNER JOIN sorted_hosts sh ON h.id = sh.id
+      LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+      LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+      LEFT JOIN countries c ON h.country_id = c.id
+    ),
+    total_count AS (
+      SELECT COUNT(*) as total_count
+      FROM hosts_with_whois_status
+    )
+    SELECT 
+      hd.*,
+      tc.total_count
+    FROM host_details hd
+    CROSS JOIN total_count tc
+    ORDER BY hd.rn
+  `;
+
+  const hosts = await sequelize.query(hostsQuery, {
+    replacements: hostsReplacements,
+    type: sequelize.QueryTypes.SELECT,
+  });
+
+  const totalItems = hosts.length > 0 ? parseInt(hosts[0]?.total_count || 0) : 0;
+  const totalPages = Math.ceil(totalItems / limitNum);
+  
+  const items = hosts.length > 0 
+    ? hosts.map(host => {
+        const formatted = formatHostFromRaw(host);
+        delete formatted.rn;
+        return formatted;
+      })
+    : [];
+
+  return {
+    items,
+    pagination: {
+      currentPage: pageNum,
+      totalPages: totalPages,
+      totalItems: totalItems,
+      hasNext: pageNum < totalPages,
+      hasPrev: pageNum > 1,
+    },
+    tabs
+  };
+}
+
+// Получение всех хостов (без группировки)
+async function getAllHosts(whereClause, replacements, pageNum, limitNum, offset, groupValue) {
+  console.log('getAllHosts groupValue:', groupValue);
+  
+  const hostsQuery = `
+    WITH sorted_hosts AS (
+      SELECT 
+        h.id,
+        ROW_NUMBER() OVER (
+          ORDER BY 
+            CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+            h.priority_id DESC NULLS LAST,
+            h.updated_at DESC
+        ) as rn
+      FROM hosts h
+      ${whereClause}
+    ),
+    paginated_hosts AS (
+      SELECT id FROM sorted_hosts
+      WHERE rn > :offset AND rn <= :offsetPlusLimit
+      ORDER BY rn
+    ),
+    host_details AS (
+      SELECT 
+        h.id,
+        h.ip,
+        h.reachable,
+        TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+        h.priority_id,
+        h.grouping_id,
+        h.country_id,
+        hp.name as priority_name,
+        hg.name as grouping_name,
+        c.name as country_name,
+        (
+          SELECT COALESCE(
+            json_agg(
+              json_build_object(
+                'port', p.port,
+                'type', p.type,
+                'port_name', wkp.name
+              )
+              ORDER BY p.port
+            ),
+            '[]'::json
+          )
+          FROM ports p
+          LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+          WHERE p.host_id = h.id
+        ) as ports_json,
+        EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois
+      FROM hosts h
+      INNER JOIN paginated_hosts ph ON h.id = ph.id
+      LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+      LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+      LEFT JOIN countries c ON h.country_id = c.id
+    ),
+    total_count AS (
+      SELECT COUNT(DISTINCT h.id) as total_count
+      FROM hosts h
+      ${whereClause}
+    )
+    SELECT 
+      hd.*,
+      tc.total_count
+    FROM host_details hd
+    CROSS JOIN total_count tc
+    ORDER BY (
+      SELECT rn FROM sorted_hosts sh WHERE sh.id = hd.id
+    )
+  `;
+
+  const hosts = await sequelize.query(hostsQuery, {
+    replacements: {
+      ...replacements,
+      offset: offset,
+      offsetPlusLimit: offset + limitNum,
+    },
+    type: sequelize.QueryTypes.SELECT,
+  });
+
+  const totalItems = hosts.length > 0 ? parseInt(hosts[0]?.total_count || 0) : 0;
+  const totalPages = Math.ceil(totalItems / limitNum);
+  const items = hosts.map(formatHostFromRaw);
+
+  return {
+    items,
+    pagination: {
+      currentPage: pageNum,
+      totalPages: totalPages,
+      totalItems: totalItems,
+      hasNext: pageNum < totalPages,
+      hasPrev: pageNum > 1,
+    },
+    tabs: []
+  };
 }
 
 // Функция для получения данных по группе с пагинацией
 export const getGroupDetails = async (req, res) => {
-  const { group, page = 1, limit = 10 } = req.query;
-  const pageNum = Math.max(1, parseInt(page) || 1);
-  const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
-  const offset = (pageNum - 1) * limitNum;
-
   try {
-    // Ищем группу по имени
-    const groupData = await Grouping.findOne({
-      where: { name: group },
-      attributes: ["id", "name"],
-      raw: true,
-    });
+    const { group, page = 1, limit = 10 } = req.query;
+    const { pageNum, limitNum, offset } = paginate(req);
 
-    if (!groupData) {
-      return res.status(404).json({ error: "Группа не найдена" });
-    }
+    const hostsQuery = `
+      WITH sorted_hosts AS (
+        SELECT 
+          h.id,
+          ROW_NUMBER() OVER (
+            ORDER BY 
+              CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+              h.priority_id DESC NULLS LAST,
+              h.updated_at DESC
+          ) as rn
+        FROM hosts h
+        INNER JOIN host_groupings hg ON h.grouping_id = hg.id
+        WHERE hg.name = :groupName
+      ),
+      paginated_hosts AS (
+        SELECT id FROM sorted_hosts
+        WHERE rn > :offset AND rn <= :offsetPlusLimit
+        ORDER BY rn
+      ),
+      host_details AS (
+        SELECT 
+          h.id,
+          h.ip,
+          h.reachable,
+          TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+          h.priority_id,
+          h.grouping_id,
+          h.country_id,
+          hp.name as priority_name,
+          hg.name as grouping_name,
+          c.name as country_name,
+          (
+            SELECT COALESCE(
+              json_agg(
+                json_build_object(
+                  'port', p.port,
+                  'type', p.type,
+                  'port_name', wkp.name
+                )
+                ORDER BY p.port
+              ),
+              '[]'::json
+            )
+            FROM ports p
+            LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+            WHERE p.host_id = h.id
+          ) as ports_json,
+          EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois
+        FROM hosts h
+        INNER JOIN paginated_hosts ph ON h.id = ph.id
+        LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+        INNER JOIN host_groupings hg ON h.grouping_id = hg.id
+        LEFT JOIN countries c ON h.country_id = c.id
+        WHERE hg.name = :groupName
+      ),
+      total_count AS (
+        SELECT COUNT(*) as total_count
+        FROM hosts h
+        INNER JOIN host_groupings hg ON h.grouping_id = hg.id
+        WHERE hg.name = :groupName
+      )
+      SELECT 
+        hd.*,
+        tc.total_count
+      FROM host_details hd
+      CROSS JOIN total_count tc
+      ORDER BY (
+        SELECT rn FROM sorted_hosts sh WHERE sh.id = hd.id
+      )
+    `;
 
-    // Получаем хосты для этой группы с пагинацией
-    const hosts = await Host.findAll({
-      include: [
-        {
-          model: Port,
-          attributes: ["port", "type"],
-          include: [
-            {
-              model: WellKnownPort,
-              attributes: ["name"],
-              required: false,
-            },
-          ],
-        },
-        {
-          model: Priority,
-          attributes: ["id", "name"],
-          required: false,
-        },
-        {
-          model: Country,
-          attributes: ["id", "name"],
-          required: false,
-        },
-        {
-          model: Whois,
-          attributes: ["value"],
-          include: [
-            {
-              model: WhoisKey,
-              attributes: ["key_name"],
-              required: false,
-            },
-          ],
-          required: false,
-        },
-      ],
-      where: {
-        grouping_id: groupData.id,
+    const hosts = await sequelize.query(hostsQuery, {
+      replacements: {
+        groupName: group,
+        offset: offset,
+        offsetPlusLimit: offset + limitNum,
       },
-      order: [
-        ["priority_id", "DESC"],
-        ["updated_at", "DESC"],
-      ],
-      limit: limitNum,
-      offset: offset,
+      type: sequelize.QueryTypes.SELECT,
     });
 
-    const formattedHosts = hosts.map(formatHostData);
-    const totalItems = await Host.count({
-      where: {
-        grouping_id: groupData.id,
-      },
-    });
-
-    const totalPages = Math.ceil(totalItems / limitNum);
-
-    return res.json({
-      items: {
-        items: formattedHosts,
-        name: groupData.name,
+    if (hosts.length === 0) {
+      return res.status(404).json({ 
+        message: "Группа не найдена или в ней нет хостов",
+        items: [],
         pagination: {
           currentPage: pageNum,
+          totalPages: 0,
+          totalItems: 0,
+          hasNext: false,
+          hasPrev: false,
+        }
+      });
+    }
 
-          totalPages: totalPages,
-          totalItems: totalItems,
-          hasNext: pageNum < totalPages,
-          hasPrev: pageNum > 1,
-        },
-      },
+    const totalItems = parseInt(hosts[0]?.total_count || 0);
+    const totalPages = Math.ceil(totalItems / limitNum);
+    const items = hosts.map(formatHostFromRaw);
 
+    return res.json({
+      items,
       pagination: {
         currentPage: pageNum,
         totalPages: totalPages,
@@ -1416,9 +1768,8 @@ export const getGroupDetails = async (req, res) => {
         hasNext: pageNum < totalPages,
         hasPrev: pageNum > 1,
       },
-
-      field: "groups",
-      type: "group",
+      type: "search",
+      field: "group",
     });
   } catch (error) {
     console.error("Ошибка в getGroupDetails:", error);
@@ -1428,82 +1779,110 @@ export const getGroupDetails = async (req, res) => {
 
 // Функция для получения данных по стране с пагинацией
 export const getCountryDetails = async (req, res) => {
-  const { country, page = 1, limit = 10 } = req.query;
-  const pageNum = Math.max(1, parseInt(page) || 1);
-  const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
-  const offset = (pageNum - 1) * limitNum;
-
   try {
-    // Ищем страну по имени
-    const countryData = await Country.findOne({
-      where: { name: country },
-      attributes: ["id", "name"],
-      raw: true,
+    const { country, page = 1, limit = 10 } = req.query;
+    const { pageNum, limitNum, offset } = paginate(req);
+
+    const hostsQuery = `
+      WITH sorted_hosts AS (
+        SELECT 
+          h.id,
+          ROW_NUMBER() OVER (
+            ORDER BY 
+              CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+              h.priority_id DESC NULLS LAST,
+              h.updated_at DESC
+          ) as rn
+        FROM hosts h
+        INNER JOIN countries c ON h.country_id = c.id
+        WHERE c.name = :countryName
+      ),
+      paginated_hosts AS (
+        SELECT id FROM sorted_hosts
+        WHERE rn > :offset AND rn <= :offsetPlusLimit
+        ORDER BY rn
+      ),
+      host_details AS (
+        SELECT 
+          h.id,
+          h.ip,
+          h.reachable,
+          TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+          h.priority_id,
+          h.grouping_id,
+          h.country_id,
+          hp.name as priority_name,
+          hg.name as grouping_name,
+          c.name as country_name,
+          (
+            SELECT COALESCE(
+              json_agg(
+                json_build_object(
+                  'port', p.port,
+                  'type', p.type,
+                  'port_name', wkp.name
+                )
+                ORDER BY p.port
+              ),
+              '[]'::json
+            )
+            FROM ports p
+            LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+            WHERE p.host_id = h.id
+          ) as ports_json,
+          EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois
+        FROM hosts h
+        INNER JOIN paginated_hosts ph ON h.id = ph.id
+        LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+        LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+        INNER JOIN countries c ON h.country_id = c.id
+        WHERE c.name = :countryName
+      ),
+      total_count AS (
+        SELECT COUNT(*) as total_count
+        FROM hosts h
+        INNER JOIN countries c ON h.country_id = c.id
+        WHERE c.name = :countryName
+      )
+      SELECT 
+        hd.*,
+        tc.total_count
+      FROM host_details hd
+      CROSS JOIN total_count tc
+      ORDER BY (
+        SELECT rn FROM sorted_hosts sh WHERE sh.id = hd.id
+      )
+    `;
+
+    const hosts = await sequelize.query(hostsQuery, {
+      replacements: {
+        countryName: country,
+        offset: offset,
+        offsetPlusLimit: offset + limitNum,
+      },
+      type: sequelize.QueryTypes.SELECT,
     });
 
-    if (!countryData) {
-      return res.status(404).json({ error: "Страна не найдена" });
+    if (hosts.length === 0) {
+      return res.status(404).json({ 
+        message: "Страна не найдена или в ней нет хостов",
+        items: [],
+        pagination: {
+          currentPage: pageNum,
+          totalPages: 0,
+          totalItems: 0,
+          hasNext: false,
+          hasPrev: false,
+        }
+      });
     }
 
-    // Получаем хосты для этой страны с пагинацией
-    const hosts = await Host.findAll({
-      include: [
-        {
-          model: Port,
-          attributes: ["port", "type"],
-          include: [
-            {
-              model: WellKnownPort,
-              attributes: ["name"],
-              required: false,
-            },
-          ],
-        },
-        {
-          model: Priority,
-          attributes: ["id", "name"],
-          required: false,
-        },
-        {
-          model: Grouping,
-          attributes: ["id", "name"],
-          required: false,
-        },
-        {
-          model: Whois,
-          attributes: ["value"],
-          include: [
-            {
-              model: WhoisKey,
-              attributes: ["key_name"],
-              required: false,
-            },
-          ],
-          required: false,
-        },
-      ],
-      where: {
-        country_id: countryData.id,
-      },
-      order: [
-        ["priority_id", "DESC"],
-        ["updated_at", "DESC"],
-      ],
-      limit: limitNum,
-      offset: offset,
-    });
-
-    const formattedHosts = hosts.map(formatHostData);
-    const totalItems = await Host.count({
-      where: {
-        country_id: countryData.id,
-      },
-    });
-
+    const totalItems = parseInt(hosts[0]?.total_count || 0);
     const totalPages = Math.ceil(totalItems / limitNum);
+    const items = hosts.map(formatHostFromRaw);
 
     return res.json({
-      items: formattedHosts,
+      items,
       pagination: {
         currentPage: pageNum,
         totalPages: totalPages,
@@ -1511,7 +1890,8 @@ export const getCountryDetails = async (req, res) => {
         hasNext: pageNum < totalPages,
         hasPrev: pageNum > 1,
       },
-      country: countryData.name,
+      type: "search",
+      field: "country",
     });
   } catch (error) {
     console.error("Ошибка в getCountryDetails:", error);
@@ -1521,82 +1901,110 @@ export const getCountryDetails = async (req, res) => {
 
 // Функция для получения данных по приоритету с пагинацией
 export const getPriorityDetails = async (req, res) => {
-  const { priority, page = 1, limit = 10 } = req.query;
-  const pageNum = Math.max(1, parseInt(page) || 1);
-  const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
-  const offset = (pageNum - 1) * limitNum;
-
   try {
-    // Ищем приоритет по имени
-    const priorityData = await Priority.findOne({
-      where: { name: priority },
-      attributes: ["id", "name"],
-      raw: true,
+    const { priority, page = 1, limit = 10 } = req.query;
+    const { pageNum, limitNum, offset } = paginate(req);
+
+    const hostsQuery = `
+      WITH sorted_hosts AS (
+        SELECT 
+          h.id,
+          ROW_NUMBER() OVER (
+            ORDER BY 
+              CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+              h.priority_id DESC NULLS LAST,
+              h.updated_at DESC
+          ) as rn
+        FROM hosts h
+        INNER JOIN host_priorities hp ON h.priority_id = hp.id
+        WHERE hp.name = :priorityName
+      ),
+      paginated_hosts AS (
+        SELECT id FROM sorted_hosts
+        WHERE rn > :offset AND rn <= :offsetPlusLimit
+        ORDER BY rn
+      ),
+      host_details AS (
+        SELECT 
+          h.id,
+          h.ip,
+          h.reachable,
+          TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+          h.priority_id,
+          h.grouping_id,
+          h.country_id,
+          hp.name as priority_name,
+          hg.name as grouping_name,
+          c.name as country_name,
+          (
+            SELECT COALESCE(
+              json_agg(
+                json_build_object(
+                  'port', p.port,
+                  'type', p.type,
+                  'port_name', wkp.name
+                )
+                ORDER BY p.port
+              ),
+              '[]'::json
+            )
+            FROM ports p
+            LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+            WHERE p.host_id = h.id
+          ) as ports_json,
+          EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois
+        FROM hosts h
+        INNER JOIN paginated_hosts ph ON h.id = ph.id
+        INNER JOIN host_priorities hp ON h.priority_id = hp.id
+        LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+        LEFT JOIN countries c ON h.country_id = c.id
+        WHERE hp.name = :priorityName
+      ),
+      total_count AS (
+        SELECT COUNT(*) as total_count
+        FROM hosts h
+        INNER JOIN host_priorities hp ON h.priority_id = hp.id
+        WHERE hp.name = :priorityName
+      )
+      SELECT 
+        hd.*,
+        tc.total_count
+      FROM host_details hd
+      CROSS JOIN total_count tc
+      ORDER BY (
+        SELECT rn FROM sorted_hosts sh WHERE sh.id = hd.id
+      )
+    `;
+
+    const hosts = await sequelize.query(hostsQuery, {
+      replacements: {
+        priorityName: priority,
+        offset: offset,
+        offsetPlusLimit: offset + limitNum,
+      },
+      type: sequelize.QueryTypes.SELECT,
     });
 
-    if (!priorityData) {
-      return res.status(404).json({ error: "Приоритет не найден" });
+    if (hosts.length === 0) {
+      return res.status(404).json({ 
+        message: "Приоритет не найден или в нем нет хостов",
+        items: [],
+        pagination: {
+          currentPage: pageNum,
+          totalPages: 0,
+          totalItems: 0,
+          hasNext: false,
+          hasPrev: false,
+        }
+      });
     }
 
-    // Получаем хосты для этого приоритета с пагинацией
-    const hosts = await Host.findAll({
-      include: [
-        {
-          model: Port,
-          attributes: ["port", "type"],
-          include: [
-            {
-              model: WellKnownPort,
-              attributes: ["name"],
-              required: false,
-            },
-          ],
-        },
-        {
-          model: Grouping,
-          attributes: ["id", "name"],
-          required: false,
-        },
-        {
-          model: Country,
-          attributes: ["id", "name"],
-          required: false,
-        },
-        {
-          model: Whois,
-          attributes: ["value"],
-          include: [
-            {
-              model: WhoisKey,
-              attributes: ["key_name"],
-              required: false,
-            },
-          ],
-          required: false,
-        },
-      ],
-      where: {
-        priority_id: priorityData.id,
-      },
-      order: [
-        ["priority_id", "DESC"],
-        ["updated_at", "DESC"],
-      ],
-      limit: limitNum,
-      offset: offset,
-    });
-
-    const formattedHosts = hosts.map(formatHostData);
-    const totalItems = await Host.count({
-      where: {
-        priority_id: priorityData.id,
-      },
-    });
-
+    const totalItems = parseInt(hosts[0]?.total_count || 0);
     const totalPages = Math.ceil(totalItems / limitNum);
+    const items = hosts.map(formatHostFromRaw);
 
     return res.json({
-      items: formattedHosts,
+      items,
       pagination: {
         currentPage: pageNum,
         totalPages: totalPages,
@@ -1604,14 +2012,15 @@ export const getPriorityDetails = async (req, res) => {
         hasNext: pageNum < totalPages,
         hasPrev: pageNum > 1,
       },
-      priority: priorityData.name,
+      type: "search",
+      field: "priority",
     });
   } catch (error) {
     console.error("Ошибка в getPriorityDetails:", error);
     return res.status(500).json({ error: "Внутренняя ошибка сервера" });
   }
 };
-/*************************************************************************** */
+
 // import { Sequelize } from "sequelize";
 // const { Op } = Sequelize;
 // import {
@@ -1626,1403 +2035,1332 @@ export const getPriorityDetails = async (req, res) => {
 //   Country,
 // } from "../models/index.js";
 
-// // Вспомогательная функция для форматирования данных хоста
-// const formatHostData = (host) => {
-//   const openPorts = [];
-//   const filteredPorts = [];
-//   const openPortsSet = new Set();
-//   const filteredPortsSet = new Set();
-
-//   // console.log('host.Ports >> ', host.Ports)
-//   if (host.Ports && Array.isArray(host.Ports)) {
-//     host.Ports.forEach((port) => {
-//       // console.log('port.WellKnownPort ', port.WellKnownPort)
-//       const portInfo = {
-//         port: port.port,
-//         name: port.name || port.WellKnownPort?.dataValues.name  || null,
-//         // name: port.name || null,
-//       };
-//       // console.log('portInfo >> ', portInfo)
-//       if (port.type === "open" && !openPortsSet.has(port.port)) {
-//         openPorts.push(portInfo);
-//         openPortsSet.add(port.port);
-//       } else if (port.type === "filtered" && !filteredPortsSet.has(port.port)) {
-//         filteredPorts.push(portInfo);
-//         filteredPortsSet.add(port.port);
+// // Функция извлечения портов из JSON (унифицированная)
+// const extractPortsFromJson = (portsJson) => {
+//   const result = { open: [], filtered: [] };
+  
+//   if (!portsJson) return result;
+  
+//   try {
+//     const ports = typeof portsJson === 'string' ? JSON.parse(portsJson) : portsJson;
+    
+//     if (!Array.isArray(ports) || ports.length === 0) return result;
+    
+//     for (let i = 0; i < ports.length; i++) {
+//       const port = ports[i];
+//       if (port && port.port && port.type) {
+//         const portInfo = {
+//           port: port.port,
+//           name: port.port_name || null,
+//         };
+        
+//         if (port.type === "open") {
+//           result.open.push(portInfo);
+//         } else if (port.type === "filtered") {
+//           result.filtered.push(portInfo);
+//         }
 //       }
-//     });
+//     }
+//   } catch (e) {
+//     console.error("Error extracting ports:", e);
 //   }
-//   // console.log('openPorts >> ', openPorts)
+  
+//   return result;
+// };
 
-//   const hasWhois =
-//     host.Whois && Array.isArray(host.Whois) && host.Whois.length > 0;
-
-//   const priorityInfo = {
-//     priority: null,
-//     grouping: null,
-//   };
-
-//   // @TODO изменил Priority => priority county и grouping
-//   if (host.priority_id || host.priority) {
-//     priorityInfo.priority = {
-//       id: host.priority_id || host.priority?.id,
-//       name: host.priority?.name || "Unknown",
-//     };
-//   }
-
-//   if (host.grouping_id || host.grouping) {
-//     priorityInfo.grouping = {
-//       id: host.grouping_id || host.grouping?.id,
-//       name: host.grouping?.name || null,
-//     };
-//   }
-
-//   // Добавляем информацию о стране
-//   const countryInfo = host.country
-//     ? {
-//         id: host.country.id,
-//         name: host.country.name,
-//       }
-//     : null;
-
-//   return {
+// // Универсальная функция форматирования данных хоста
+// const formatHostFromRaw = (host) => {
+//   const formatted = {
 //     id: host.id,
 //     ip: host.ip,
 //     reachable: host.reachable,
-//     updated_at: host.updated_at
-//       ? host.updated_at.toISOString().replace("T", " ").substring(0, 19)
-//       : null,
-//     port_data: {
-//       open: openPorts,
-//       filtered: filteredPorts,
+//     updated_at: host.updated_at,
+//     port_data: extractPortsFromJson(host.ports_json),
+//     priority_info: {
+//       priority: host.priority_id ? {
+//         id: host.priority_id,
+//         name: host.priority_name || "Unknown",
+//       } : null,
+//       grouping: host.grouping_id ? {
+//         id: host.grouping_id,
+//         name: host.grouping_name || null,
+//       } : null,
 //     },
-//     priority_info: priorityInfo,
-//     country_info: countryInfo,
-//     has_whois: hasWhois,
+//     country_info: host.country_id ? {
+//       id: host.country_id,
+//       name: host.country_name || null,
+//     } : null,
+//     has_whois: !!host.has_whois,
 //   };
+  
+//   // Удаляем служебные поля, если они есть
+//   delete formatted.rn;
+//   delete formatted.total_count;
+  
+//   return formatted;
 // };
 
-// const getDataDefaultEmpty = (pageNum, groupingType) => ({
-//   items: [],
-//   pagination: {
-//     currentPage: pageNum,
-//     totalPages: 0,
-//     totalItems: 0,
-//     hasNext: false,
-//     hasPrev: false,
-//   },
-//   type: "group",
-//   field: groupingType,
-// });
-
-// // Вспомогательная функция для парсинга портов из строки
-// const parsePortsFromString = (portString) => {
-//   if (!portString) return [];
-//   // Проверяем, является ли portString массивом
-//   const values = Array.isArray(portString) ? portString : [portString];
-//   const ports = [];
-//   values.forEach((value) => {
-//     if (typeof value === "string") {
-//       const portMatch = value.match(/(\d+)/);
-//       if (portMatch) {
-//         const portNumber = parseInt(portMatch[1]);
-//         if (portNumber >= 1 && portNumber <= 65535) {
-//           ports.push(portNumber);
-//         }
-//       }
-//     }
-//   });
-//   return [...new Set(ports)];
+// // Вспомогательная функция для пагинации
+// const paginate = (req) => {
+//   const { page = 1, limit = 10 } = req.body || req.query;
+//   const pageNum = Math.max(1, parseInt(page, 10) || 1);
+//   const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 10));
+//   const offset = (pageNum - 1) * limitNum;
+//   return { pageNum, limitNum, offset };
 // };
 
-// // Функция для получения ID приоритетов по названиям
-// const getPriorityIdsFromNames = async (priorityNames) => {
-//   if (!priorityNames) return [];
-//   const names = Array.isArray(priorityNames) ? priorityNames : [priorityNames];
-//   const priorities = await Priority.findAll({
-//     attributes: ["id"],
-//     where: {
-//       name: { [Op.in]: names },
-//     },
-//     raw: true,
-//   });
-//   return priorities.map((p) => p.id);
-// };
-
-// // Функция для получения ID групп по названиям
-// const getGroupIdsFromNames = async (groupNames) => {
-//   if (!groupNames) return [];
-//   const names = Array.isArray(groupNames) ? groupNames : [groupNames];
-//   const groups = await Grouping.findAll({
-//     attributes: ["id"],
-//     where: {
-//       name: { [Op.in]: names },
-//     },
-//     raw: true,
-//   });
-//   return groups.map((g) => g.id);
-// };
-
-// // Функция для получения ID стран по названиям
-// const getCountryIdsFromNames = async (countryNames) => {
-//   if (!countryNames) return [];
-//   const names = Array.isArray(countryNames) ? countryNames : [countryNames];
-//   const countries = await Country.findAll({
-//     attributes: ["id"],
-//     where: {
-//       name: { [Op.in]: names },
-//     },
-//     raw: true,
-//   });
-//   return countries.map((c) => c.id);
-// };
-
-// // Функция для парсинга строки портов с запятыми
-// const parsePortsString = (portString) => {
-//   if (!portString) return [];
-//   if (Array.isArray(portString)) {
-//     return parsePortsFromString(portString);
-//   }
-//   // Разделяем строку по запятым
-//   const portStrings = portString.split(",").map((s) => s.trim());
-//   const ports = [];
-//   portStrings.forEach((str) => {
-//     const portMatch = str.match(/(\d+)/);
-//     if (portMatch) {
-//       const portNumber = parseInt(portMatch[1]);
-//       if (portNumber >= 1 && portNumber <= 65535) {
-//         ports.push(portNumber);
-//       }
-//     }
-//   });
-//   return [...new Set(ports)];
-// };
-
-// // Функция для извлечения значений из MultiSelectDataList
-// const extractValues = (input) => {
-//   if (!input) return [];
-//   if (Array.isArray(input)) return input;
-//   if (typeof input === "string") {
-//     // Разделяем по запятым и убираем пробелы
-//     return input
-//       .split(",")
-//       .map((s) => s.trim())
-//       .filter((s) => s);
-//   }
-//   return [];
-// };
-
-// // Основная функция группировки
+// // Основная функция группировки (оптимизированная)
 // export const getGrouping = async (req, res) => {
-//   const {
-//     ip,
-//     portOpened,
-//     portFiltered,
-//     keyword,
-//     priority,
-//     group,
-//     country,
-//     whois,
-//     groupingType = "port",
-//     dateRange: { startDate, endDate } = {},
-//     page = 1,
-//     limit = 10,
-//   } = req.body;
-
 //   try {
-//     console.log("Получен запрос группировки:", req.body);
+//     const {
+//       groupingType = "port",
+//       page = 1,
+//       limit = 10,
+//       groupValue,
+//       ...filters
+//     } = req.body;
 
-//     // Параметры пагинации
-//     const pageNum = Math.max(1, parseInt(page) || 1);
-//     const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
-//     const offset = (pageNum - 1) * limitNum;
+//     const { pageNum, limitNum, offset } = paginate(req);
 
-//     let hostIds = new Set();
+//     // Базовый запрос для хостов с учетом фильтров
+//     let whereConditions = [];
+//     let replacements = {};
 
-//     // 1. Фильтр по IP
-//     if (ip) {
-//       console.log("Фильтр по IP:", ip);
-//       const ipQuery = `
-//         SELECT id FROM hosts 
-//         WHERE CAST(ip AS TEXT) ILIKE :ipPattern
-//       `;
-//       const ipHosts = await sequelize.query(ipQuery, {
-//         replacements: {
-//           ipPattern: `${ip}%`,
-//         },
-//         type: sequelize.QueryTypes.SELECT,
-//         raw: true,
-//       });
-
-//       if (!ipHosts.length) {
-//         return res.json(getDataDefaultEmpty(pageNum, groupingType));
-//       }
-
-//       ipHosts.forEach((host) => hostIds.add(host.id));
-//       console.log(`После фильтра по IP: ${hostIds.size} хостов`);
+//     // Фильтр по IP
+//     if (filters.ip) {
+//       whereConditions.push(`h.ip::text ILIKE :ipPattern`);
+//       replacements.ipPattern = `${filters.ip}%`;
 //     }
 
-//     // 2. Фильтр по дате
-//     if (startDate || endDate) {
-//       console.log("Фильтр по дате:", { startDate, endDate });
-//       const dateWhere = {};
-//       if (startDate) dateWhere[Op.gte] = new Date(startDate);
-//       if (endDate) dateWhere[Op.lte] = new Date(endDate);
-
-//       const dateHosts = await Host.findAll({
-//         attributes: ["id"],
-//         where:
-//           hostIds.size > 0
-//             ? {
-//                 id: Array.from(hostIds),
-//                 updated_at: dateWhere,
-//               }
-//             : { updated_at: dateWhere },
-//         raw: true,
-//       });
-
-//       if (!dateHosts.length) {
-//         return res.json(getDataDefaultEmpty(pageNum, groupingType));
+//     // Фильтр по дате
+//     if (filters.dateRange?.startDate || filters.dateRange?.endDate) {
+//       const dateConditions = [];
+//       if (filters.dateRange.startDate) {
+//         dateConditions.push(`h.updated_at >= :startDate`);
+//         replacements.startDate = filters.dateRange.startDate;
 //       }
-
-//       const dateHostIds = new Set(dateHosts.map((h) => h.id));
-//       hostIds =
-//         hostIds.size > 0
-//           ? new Set(Array.from(hostIds).filter((id) => dateHostIds.has(id)))
-//           : dateHostIds;
-
-//       console.log(`После фильтра по дате: ${hostIds.size} хостов`);
-//     }
-
-//     // 3. Фильтр по приоритету
-//     if (priority) {
-//       console.log("Фильтр по приоритету:", priority);
-//       const priorityNames = extractValues(priority);
-//       const priorityIds = await getPriorityIdsFromNames(priorityNames);
-
-//       if (priorityIds.length > 0) {
-//         const priorityHosts = await Host.findAll({
-//           attributes: ["id"],
-//           where:
-//             hostIds.size > 0
-//               ? {
-//                   id: Array.from(hostIds),
-//                   priority_id: priorityIds,
-//                 }
-//               : {
-//                   priority_id: priorityIds,
-//                 },
-//           raw: true,
-//         });
-
-//         if (!priorityHosts.length) {
-//           return res.json({
-//             items: [],
-//             pagination: {
-//               currentPage: pageNum,
-//               totalPages: 0,
-//               totalItems: 0,
-//               hasNext: false,
-//               hasPrev: false,
-//             },
-//             type: "group",
-//             field: groupingType,
-//           });
-//         }
-
-//         const priorityHostIds = new Set(priorityHosts.map((h) => h.id));
-//         hostIds =
-//           hostIds.size > 0
-//             ? new Set(
-//                 Array.from(hostIds).filter((id) => priorityHostIds.has(id))
-//               )
-//             : priorityHostIds;
+//       if (filters.dateRange.endDate) {
+//         dateConditions.push(`h.updated_at <= :endDate`);
+//         replacements.endDate = filters.dateRange.endDate;
 //       }
-
-//       console.log(`После фильтра по приоритету: ${hostIds.size} хостов`);
-//     }
-
-//     // 4. Фильтр по группировке
-//     if (group) {
-//       console.log("Фильтр по группировке:", group);
-//       const groupNames = extractValues(group);
-//       const groupIds = await getGroupIdsFromNames(groupNames);
-
-//       if (groupIds.length > 0) {
-//         const groupHosts = await Host.findAll({
-//           attributes: ["id"],
-//           where:
-//             hostIds.size > 0
-//               ? {
-//                   id: Array.from(hostIds),
-//                   grouping_id: groupIds,
-//                 }
-//               : {
-//                   grouping_id: groupIds,
-//                 },
-//           raw: true,
-//         });
-
-//         if (!groupHosts.length) {
-//           return res.json(getDataDefaultEmpty(pageNum, groupingType));
-//         }
-
-//         const groupHostIds = new Set(groupHosts.map((h) => h.id));
-//         hostIds =
-//           hostIds.size > 0
-//             ? new Set(Array.from(hostIds).filter((id) => groupHostIds.has(id)))
-//             : groupHostIds;
-//       }
-
-//       console.log(`После фильтра по группировке: ${hostIds.size} хостов`);
-//     }
-
-//     // 5. Фильтр по стране
-//     if (country) {
-//       console.log("Фильтр по стране:", country);
-//       const countryNames = extractValues(country);
-//       const countryIds = await getCountryIdsFromNames(countryNames);
-
-//       if (countryIds.length > 0) {
-//         const countryHosts = await Host.findAll({
-//           attributes: ["id"],
-//           where:
-//             hostIds.size > 0
-//               ? {
-//                   id: Array.from(hostIds),
-//                   country_id: countryIds,
-//                 }
-//               : {
-//                   country_id: countryIds,
-//                 },
-//           raw: true,
-//         });
-
-//         if (!countryHosts.length) {
-//           return res.json(getDataDefaultEmpty(pageNum, groupingType));
-//         }
-
-//         const countryHostIds = new Set(countryHosts.map((h) => h.id));
-//         hostIds =
-//           hostIds.size > 0
-//             ? new Set(
-//                 Array.from(hostIds).filter((id) => countryHostIds.has(id))
-//               )
-//             : countryHostIds;
-//       }
-
-//       console.log(`После фильтра по стране: ${hostIds.size} хостов`);
-//     }
-
-//     // 6. Фильтр по наличию WHOIS данных
-//     if (whois !== "all") {
-//       console.log("Фильтр по наличию WHOIS:", whois);
-
-//       if (whois === "withWhois") {
-//         // Только с WHOIS
-//         const whoisHosts = await Host.findAll({
-//           attributes: ["id"],
-//           include: [
-//             {
-//               model: Whois,
-//               attributes: [],
-//               required: true,
-//             },
-//           ],
-//           where: hostIds.size > 0 ? { id: Array.from(hostIds) } : {},
-//           raw: true,
-//         });
-
-//         if (!whoisHosts.length) {
-//           return res.json(getDataDefaultEmpty(pageNum, groupingType));
-//         }
-
-//         const whoisHostIds = new Set(whoisHosts.map((h) => h.id));
-//         hostIds =
-//           hostIds.size > 0
-//             ? new Set(Array.from(hostIds).filter((id) => whoisHostIds.has(id)))
-//             : whoisHostIds;
-//       } else if (whois === "noWhois") {
-//         const noWhoisHosts = await Host.findAll({
-//           attributes: ["id"],
-//           include: [
-//             {
-//               model: Whois,
-//               attributes: [],
-//               required: false,
-//             },
-//           ],
-//           where:
-//             hostIds.size > 0
-//               ? {
-//                   id: Array.from(hostIds),
-//                   "$Whois.id$": null,
-//                 }
-//               : {
-//                   "$Whois.id$": null,
-//                 },
-//           raw: true,
-//         });
-
-//         if (!noWhoisHosts.length) {
-//           return res.json(getDataDefaultEmpty(pageNum, groupingType));
-//         }
-
-//         const noWhoisHostIds = new Set(noWhoisHosts.map((h) => h.id));
-//         hostIds =
-//           hostIds.size > 0
-//             ? new Set(
-//                 Array.from(hostIds).filter((id) => noWhoisHostIds.has(id))
-//               )
-//             : noWhoisHostIds;
-//       }
-
-//       console.log(`После фильтра по WHOIS: ${hostIds.size} хостов`);
-//     }
-
-//     // 7. Фильтр по ключевым словам
-//     if (keyword) {
-//       console.log("Фильтр по ключевым словам:", keyword);
-//       const keywords = extractValues(keyword);
-
-//       if (keywords.length > 0) {
-//         const keywordPromises = keywords.map((kw) => {
-//           const keywordSql = `
-//             SELECT DISTINCT h.id
-//             FROM hosts h
-//             INNER JOIN whois w ON h.id = w.host_id
-//             INNER JOIN whois_keys wk ON w.key_id = wk.id
-//             WHERE (LOWER(w.value) LIKE LOWER(:keyword) 
-//                OR LOWER(wk.key_name) LIKE LOWER(:keyword))
-//                ${hostIds.size > 0 ? "AND h.id IN (:hostIds)" : ""}
-//           `;
-//           return sequelize.query(keywordSql, {
-//             replacements: {
-//               keyword: `%${kw}%`,
-//               hostIds: hostIds.size > 0 ? Array.from(hostIds) : [],
-//             },
-//             type: sequelize.QueryTypes.SELECT,
-//           });
-//         });
-
-//         const keywordResults = await Promise.all(keywordPromises);
-//         const keywordHostIds = new Set();
-
-//         keywordResults.forEach((result) => {
-//           result.forEach((row) => keywordHostIds.add(row.id));
-//         });
-
-//         if (!keywordHostIds.size) {
-//           return res.json(getDataDefaultEmpty(pageNum, groupingType));
-//         }
-
-//         hostIds =
-//           hostIds.size > 0
-//             ? new Set(
-//                 Array.from(hostIds).filter((id) => keywordHostIds.has(id))
-//               )
-//             : keywordHostIds;
-//       }
-
-//       console.log(`После фильтра по ключевым словам: ${hostIds.size} хостов`);
-//     }
-
-//     // 8. Фильтр по портам
-//     if (portOpened || portFiltered) {
-//       console.log("Фильтр по портам:", { portOpened, portFiltered });
-//       const openedPorts = parsePortsString(portOpened);
-//       const filteredPorts = parsePortsString(portFiltered);
-
-//       let portWhereConditions = [];
-
-//       if (openedPorts.length > 0) {
-//         portWhereConditions.push({
-//           port: openedPorts,
-//           type: "open",
-//         });
-//       }
-
-//       if (filteredPorts.length > 0) {
-//         portWhereConditions.push({
-//           port: filteredPorts,
-//           type: "filtered",
-//         });
-//       }
-
-//       if (portWhereConditions.length > 0) {
-//         const portHosts = await Port.findAll({
-//           attributes: ["host_id"],
-//           where: {
-//             [Op.or]: portWhereConditions,
-//             ...(hostIds.size > 0 && { host_id: Array.from(hostIds) }),
-//           },
-//           raw: true,
-//         });
-
-//         if (!portHosts.length) {
-//           return res.json(getDataDefaultEmpty(pageNum, groupingType));
-//         }
-
-//         const portHostIds = new Set(portHosts.map((p) => p.host_id));
-//         hostIds =
-//           hostIds.size > 0
-//             ? new Set(Array.from(hostIds).filter((id) => portHostIds.has(id)))
-//             : portHostIds;
-
-//         console.log(`После фильтра по портам: ${hostIds.size} хостов`);
+//       if (dateConditions.length > 0) {
+//         whereConditions.push(`(${dateConditions.join(' AND ')})`);
 //       }
 //     }
 
-//     // Получаем отфильтрованные ID хостов
-//     const finalHostIds = Array.from(hostIds);
-
-//     if (!finalHostIds.length) {
-//       return res.json(getDataDefaultEmpty(pageNum, groupingType));
+//     // Фильтр по приоритету
+//     if (filters.priority) {
+//       const priorityNames = Array.isArray(filters.priority) ? filters.priority : [filters.priority];
+//       whereConditions.push(`hp.name IN (:priorityNames)`);
+//       replacements.priorityNames = priorityNames;
 //     }
 
-//     console.log(
-//       `Финальный отбор для группировки: ${finalHostIds.length} хостов`
-//     );
+//     // Фильтр по группе
+//     if (filters.group) {
+//       const groupNames = Array.isArray(filters.group) ? filters.group : [filters.group];
+//       whereConditions.push(`hg.name IN (:groupNames)`);
+//       replacements.groupNames = groupNames;
+//     }
 
-//     // Получаем полные данные для отфильтрованных хостов
-//     // const hosts = await Host.findAll({
-//     //   include: [
-//     //     {
-//     //       model: Port,
-//     //       attributes: ["port", "type"],
-//     //       include: [
-//     //         {
-//     //           model: WellKnownPort,
-//     //           attributes: ["name"],
-//     //           required: false,
-//     //         },
-//     //       ],
-//     //     },
-//     //     {
-//     //       model: Priority,
-//     //       attributes: ["id", "name"],
-//     //       required: false,
-//     //     },
-//     //     {
-//     //       model: Grouping,
-//     //       attributes: ["id", "name"],
-//     //       required: false,
-//     //     },
-//     //     {
-//     //       model: Country,
-//     //       attributes: ["id", "name"],
-//     //       required: false,
-//     //     },
-//     //     {
-//     //       model: Whois,
-//     //       attributes: ["value"],
-//     //       include: [
-//     //         {
-//     //           model: WhoisKey,
-//     //           attributes: ["key_name"],
-//     //           required: false,
-//     //         },
-//     //       ],
-//     //       required: false,
-//     //     },
-//     //   ],
-//     //   where: { id: finalHostIds },
-//     //   order: [
-//     //     ["priority_id", "DESC"],
-//     //     ["updated_at", "DESC"],
-//     //   ],
-//     // });
+//     // Фильтр по стране
+//     if (filters.country) {
+//       const countryNames = Array.isArray(filters.country) ? filters.country : [filters.country];
+//       whereConditions.push(`c.name IN (:countryNames)`);
+//       replacements.countryNames = countryNames;
+//     }
 
-//     /*********************************** */
+//     // Фильтр по WHOIS
+//     if (filters.whois && filters.whois !== 'all') {
+//       if (filters.whois === 'withWhois') {
+//         whereConditions.push(`EXISTS (SELECT 1 FROM whois w2 WHERE w2.host_id = h.id)`);
+//       } else if (filters.whois === 'noWhois') {
+//         whereConditions.push(`NOT EXISTS (SELECT 1 FROM whois w2 WHERE w2.host_id = h.id)`);
+//       }
+//     }
 
-//     const hosts = await sequelize.query(`
-//       SELECT
-//         h.id,
-//         h.ip,
-//         h.reachable,
-//         h.updated_at,
-//         h.priority_id,
-//         h.grouping_id,
-//         h.country_id,
-
-//         -- Данные о приоритете
-//         p.id as "priority.id",
-//         p.name as "priority.name",
-
-//         -- Данные о группировке
-//         g.id as "grouping.id",
-//         g.name as "grouping.name",
-
-//         -- Данные о стране
-//         c.id as "country.id",
-//         c.name as "country.name"
-
-//       FROM hosts h
-
-//       -- LEFT JOIN для приоритета
-//       LEFT JOIN host_priorities p ON h.priority_id = p.id
-
-//       -- LEFT JOIN для группировки
-//       LEFT JOIN host_groupings g ON h.grouping_id = g.id
-
-//       -- LEFT JOIN для страны
-//       LEFT JOIN countries c ON h.country_id = c.id
-
-//       WHERE h.id IN (:finalHostIds)
-
-//       ORDER BY
-//         h.priority_id DESC NULLS LAST,
-//         h.updated_at DESC
-//     `, {
-//       replacements: { finalHostIds },
-//       type: sequelize.QueryTypes.SELECT,
-//       nest: true,
-//     });
-
-//     // Затем отдельно получаем связанные данные
-//     if (hosts.length > 0) {
-//       const hostIds = hosts.map(h => h.id);
-
-//       // Получаем порты с well_known_ports - ИСПРАВЛЕННЫЙ ЗАПРОС
-//       const ports = await sequelize.query(`
-//         SELECT
-//           p.host_id,
-//           p.port,
-//           p.type,
-//           wkp.name as well_known_port_name
-//         FROM ports p
-//         LEFT JOIN well_known_ports wkp ON p.port = wkp.port
-//         WHERE p.host_id IN (:hostIds)
-//       `, {
-//         replacements: { hostIds },
-//         type: sequelize.QueryTypes.SELECT,
-//         nest: false,  // Используем false для плоской структуры
-//       });
-
-//       // console.log('ports >>> ', ports)
-
-//       // Получаем WHOIS данные
-//       const whoisData = await sequelize.query(`
-//         SELECT
-//           w.host_id,
-//           w.value,
-//           wk.key_name as "WhoisKey.key_name"
-//         FROM whois w
-//         LEFT JOIN whois_keys wk ON w.key_id = wk.id
-//         WHERE w.host_id IN (:hostIds)
-//       `, {
-//         replacements: { hostIds },
-//         type: sequelize.QueryTypes.SELECT,
-//         nest: true,
-//       });
-
-//       // Группируем данные по host_id
-//       const portsByHost = {};
-//       ports.forEach(port => {
-//         if (!portsByHost[port.host_id]) {
-//           portsByHost[port.host_id] = [];
-//         }
-
-//         // Получаем имя порта из well_known_port_name
-//         const portName = port.well_known_port_name || null;
-
-//         portsByHost[port.host_id].push({
-//           port: port.port,
-//           type: port.type,
-//           name: portName  // Простое поле name с именем порта
-//         });
-//       });
-//       // console.log('portsByHost >>> ', portsByHost)
-
-//       const whoisByHost = {};
-//       whoisData.forEach(whois => {
-//         if (!whoisByHost[whois.host_id]) {
-//           whoisByHost[whois.host_id] = [];
-//         }
-//         whoisByHost[whois.host_id].push({
-//           value: whois.value,
-//           WhoisKey: whois['WhoisKey.key_name'] ? { key_name: whois['WhoisKey.key_name'] } : null
-//         });
-//       });
-
-//       // Объединяем все данные
-//       hosts.forEach(host => {
-//         // Получаем все порты для хоста
-//         const allPorts = portsByHost[host.id] || [];
-
-//         // Разделяем порты по типам
-//         const openPorts = allPorts.filter(p => p.type === 'open')
-//           .map(p => ({ port: p.port, name: p.name }));
-
-//         const filteredPorts = allPorts.filter(p => p.type === 'filtered')
-//           .map(p => ({ port: p.port, name: p.name }));
-
-//         // Сохраняем оригинальную структуру
-//         host.Ports = allPorts;
-//         host.Whois = whoisByHost[host.id] || [];
-
-//         // Добавляем структурированные данные для вывода
-//         host.port_data = {
-//           open: openPorts,
-//           filtered: filteredPorts
-//         };
+//     // Фильтр по ключевым словам
+//     if (filters.keyword) {
+//       const keywords = Array.isArray(filters.keyword) ? filters.keyword : [filters.keyword];
+//       const keywordConditions = keywords.map((kw, idx) => 
+//         `(LOWER(w.value) LIKE LOWER(:keyword${idx}) OR LOWER(wk.key_name) LIKE LOWER(:keyword${idx}))`
+//       );
+//       whereConditions.push(`(${keywordConditions.join(' OR ')})`);
+//       keywords.forEach((kw, idx) => {
+//         replacements[`keyword${idx}`] = `%${kw}%`;
 //       });
 //     }
-//     /*********************************** */
 
-//     // console.log("hosts >>> ", hosts[34]);
+//     // Фильтр по портам
+//     if (filters.portOpened || filters.portFiltered) {
+//       const portConditions = [];
+      
+//       if (filters.portOpened) {
+//         const openedPorts = Array.isArray(filters.portOpened) ? filters.portOpened : [filters.portOpened];
+//         openedPorts.forEach((port, idx) => {
+//           portConditions.push(`(p.port = :openedPort${idx} AND p.type = 'open')`);
+//           replacements[`openedPort${idx}`] = parseInt(port) || port;
+//         });
+//       }
+      
+//       if (filters.portFiltered) {
+//         const filteredPorts = Array.isArray(filters.portFiltered) ? filters.portFiltered : [filters.portFiltered];
+//         filteredPorts.forEach((port, idx) => {
+//           portConditions.push(`(p.port = :filteredPort${idx} AND p.type = 'filtered')`);
+//           replacements[`filteredPort${idx}`] = parseInt(port) || port;
+//         });
+//       }
+      
+//       if (portConditions.length > 0) {
+//         whereConditions.push(`(${portConditions.join(' OR ')})`);
+//       }
+//     }
 
-//     // Форматируем данные хостов
-//     const formattedHosts = hosts.map(formatHostData);
+//     // Формируем WHERE условие
+//     const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
-//     // Группируем данные по выбранному полю
-//     const groupedData = await groupByField(
-//       groupingType,
-//       formattedHosts,
-//       finalHostIds.length,
-//       pageNum,
-//       limitNum,
-//       offset
-//     );
-
-//     // Общее количество групп для пагинации
-//     const totalGroups = groupedData.length;
-//     const totalPages = Math.ceil(totalGroups / limitNum);
-
-//     // Применяем пагинацию к группам
-//     const paginatedGroups = groupedData.slice(offset, offset + limitNum);
+//     // В зависимости от типа группировки выполняем разные запросы
+//     let result;
+//     switch (groupingType) {
+//       case 'port':
+//         result = await groupByPort(whereClause, replacements, pageNum, limitNum, offset, groupValue);
+//         break;
+//       case 'keyword':
+//         result = await groupByKeyword(whereClause, replacements, pageNum, limitNum, offset, groupValue);
+//         break;
+//       case 'priority':
+//         result = await groupByPriority(whereClause, replacements, pageNum, limitNum, offset, groupValue);
+//         break;
+//       case 'group':
+//         result = await groupByHostGroup(whereClause, replacements, pageNum, limitNum, offset, groupValue);
+//         break;
+//       case 'country':
+//         result = await groupByCountry(whereClause, replacements, pageNum, limitNum, offset, groupValue);
+//         break;
+//       case 'whois':
+//         result = await groupByWhois(whereClause, replacements, pageNum, limitNum, offset, groupValue);
+//         break;
+//       case 'ip':
+//         result = await getAllHosts(whereClause, replacements, pageNum, limitNum, offset, groupValue);
+//         break;
+//       default:
+//         result = await groupByPort(whereClause, replacements, pageNum, limitNum, offset, groupValue);
+//     }
 
 //     return res.json({
-//       items: paginatedGroups,
-//       pagination: {
-//         currentPage: pageNum,
-//         totalPages: totalPages,
-//         totalItems: totalGroups,
-//         hasNext: pageNum < totalPages,
-//         hasPrev: pageNum > 1,
-//       },
+//       items: result.items,
+//       pagination: result.pagination,
 //       type: "group",
 //       field: groupingType,
+//       tabs: result.tabs || [],
 //     });
+
 //   } catch (error) {
 //     console.error("Ошибка в getGrouping:", error);
 //     return res.status(500).json({ error: "Внутренняя ошибка сервера" });
 //   }
 // };
 
-// // Функция группировки по разным полям
-// async function groupByField(field, hosts, totalHosts, page, limit, offset) {
-//   switch (field) {
-//     case "port":
-//       return await groupByPorts(hosts, totalHosts);
-//     case "priority":
-//       return await groupByPriority(hosts);
-//     case "group":
-//       return await groupByHostGroup(hosts);
-//     case "country":
-//       return await groupByCountry(hosts);
-//     case "ip":
-//       return hosts;
-//     case "keyword":
-//       return await groupByKeywords(hosts);
-//     case "whois":
-//       return await groupByWhois(hosts);
-//     default:
-//       return await groupByPorts(hosts, totalHosts);
-//   }
-// }
-
 // // Группировка по портам
-// async function groupByPorts(hosts, totalHosts) {
-//   const portMap = new Map();
+// // Группировка по портам
+// async function groupByPort(whereClause, replacements, pageNum, limitNum, offset, groupValue) {
+//     console.log('groupByPort whereClause >> ', whereClause)
+//   // Запрос для получения уникальных портов (табы)
+//   const tabsQuery = `
+//     SELECT 
+//       p.port as value,
+//       wkp.name as name,
+//       COUNT(DISTINCT h.id) as host_count
+//     FROM hosts h
+//     INNER JOIN ports p ON h.id = p.host_id
+//     LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+//     ${whereClause}
+//     GROUP BY p.port, wkp.name
+//     ORDER BY p.port ASC
+//   `;
 
-//   // Собираем все уникальные порты из всех хостов
-//   hosts.forEach((host) => {
-//     // Открытые порты
-//     if (host.port_data.open) {
-//       host.port_data.open.forEach((port) => {
-//         if (!portMap.has(port.port)) {
-//           portMap.set(port.port, {
-//             port: port.port,
-//             name: port.name,
-//             count: 0,
-//             items: [],
-//           });
-//         }
-//         const portGroup = portMap.get(port.port);
-//         if (!portGroup.items.some((item) => item.id === host.id)) {
-//           portGroup.items.push(host);
-//           portGroup.count++;
-//         }
-//       });
-//     }
-
-//     // Фильтрованные порты
-//     if (host.port_data.filtered) {
-//       host.port_data.filtered.forEach((port) => {
-//         if (!portMap.has(port.port)) {
-//           portMap.set(port.port, {
-//             port: port.port,
-//             name: port.name,
-//             count: 0,
-//             items: [],
-//           });
-//         }
-//         const portGroup = portMap.get(port.port);
-//         if (!portGroup.items.some((item) => item.id === host.id)) {
-//           portGroup.items.push(host);
-//           portGroup.count++;
-//         }
-//       });
-//     }
+//   const tabs = await sequelize.query(tabsQuery, {
+//     replacements,
+//     type: sequelize.QueryTypes.SELECT,
 //   });
 
-//   // Преобразуем в массив и сортируем
-//   const groups = Array.from(portMap.values())
-//     .sort((a, b) => a.port - b.port)
-//     .map((group) => ({
-//       ...group,
-//       // Внутренняя пагинация для хостов в группе (если нужно)
+//   if (tabs.length === 0) {
+//     return {
+//       items: [],
 //       pagination: {
-//         currentPage: 1,
-//         totalPages: Math.ceil(group.items.length / 10),
-//         totalItems: group.items.length,
-//         hasNext: group.items.length > 10,
+//         currentPage: pageNum,
+//         totalPages: 0,
+//         totalItems: 0,
+//         hasNext: false,
 //         hasPrev: false,
 //       },
-//       // Оставляем только первые 10 хостов для отображения
-//       items: group.items.slice(0, 10),
-//     }));
+//       tabs: []
+//     };
+//   }
 
-//   return groups;
+//   // Получаем данные для первого порта
+//   const firstPort = tabs[0];
+//   const portNumber = groupValue ?? firstPort.value;
+
+//   // Основной запрос с правильным JOIN для фильтрации по порту
+//   const hostsQuery = `
+//     WITH hosts_with_port AS (
+//       SELECT DISTINCT h.id
+//       FROM hosts h
+//       INNER JOIN ports p ON h.id = p.host_id
+//       ${whereClause ? whereClause + ' AND p.port = :portNumber' : 'WHERE p.port = :portNumber'}
+//     ),
+//     sorted_hosts AS (
+//       SELECT 
+//         h.id,
+//         ROW_NUMBER() OVER (
+//           ORDER BY 
+//             CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+//             h.priority_id DESC NULLS LAST,
+//             h.updated_at DESC
+//         ) as rn
+//       FROM hosts h
+//       WHERE h.id IN (SELECT id FROM hosts_with_port)
+//     ),
+//     paginated_hosts AS (
+//       SELECT id FROM sorted_hosts
+//       WHERE rn > :offset AND rn <= :offsetPlusLimit
+//       ORDER BY rn
+//     ),
+//     host_details AS (
+//       SELECT 
+//         h.id,
+//         h.ip,
+//         h.reachable,
+//         TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+//         h.priority_id,
+//         h.grouping_id,
+//         h.country_id,
+//         hp.name as priority_name,
+//         hg.name as grouping_name,
+//         c.name as country_name,
+//         (
+//           SELECT COALESCE(
+//             json_agg(
+//               json_build_object(
+//                 'port', p2.port,
+//                 'type', p2.type,
+//                 'port_name', wkp.name
+//               )
+//               ORDER BY p2.port
+//             ),
+//             '[]'::json
+//           )
+//           FROM ports p2
+//           LEFT JOIN well_known_ports wkp ON p2.port = wkp.port
+//           WHERE p2.host_id = h.id
+//         ) as ports_json,
+//         EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois,
+//         sh.rn
+//       FROM hosts h
+//       INNER JOIN paginated_hosts ph ON h.id = ph.id
+//       INNER JOIN sorted_hosts sh ON h.id = sh.id
+//       LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+//       LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+//       LEFT JOIN countries c ON h.country_id = c.id
+//     ),
+//     total_count AS (
+//       SELECT COUNT(*) as total_count
+//       FROM hosts_with_port
+//     )
+//     SELECT 
+//       hd.*,
+//       tc.total_count
+//     FROM host_details hd
+//     CROSS JOIN total_count tc
+//     ORDER BY hd.rn
+//   `;
+
+//   const hosts = await sequelize.query(hostsQuery, {
+//     replacements: {
+//       ...replacements,
+//       portNumber,
+//       offset: offset,
+//       offsetPlusLimit: offset + limitNum,
+//     },
+//     type: sequelize.QueryTypes.SELECT,
+//   });
+
+//   if (hosts.length === 0) {
+//     return {
+//       items: [],
+//       pagination: {
+//         currentPage: pageNum,
+//         totalPages: 0,
+//         totalItems: 0,
+//         hasNext: false,
+//         hasPrev: false,
+//       },
+//       tabs
+//     };
+//   }
+
+//   const totalItems = parseInt(hosts[0]?.total_count || 0);
+//   const totalPages = Math.ceil(totalItems / limitNum);
+//   const items = hosts.map(host => {
+//     const formatted = formatHostFromRaw(host);
+//     // Удаляем rn из результата
+//     delete formatted.rn;
+//     return formatted;
+//   });
+
+//   return {
+//     items,
+//     pagination: {
+//       currentPage: pageNum,
+//       totalPages: totalPages,
+//       totalItems: totalItems,
+//       hasNext: pageNum < totalPages,
+//       hasPrev: pageNum > 1,
+//     },
+//     tabs
+//   };
+// }
+// // Группировка по ключевым словам
+// async function groupByKeyword(whereClause, replacements, pageNum, limitNum, offset, groupValue) {
+//   // Запрос для получения уникальных ключевых слов (табы)
+//   console.log('groupByKeyword whereClause >> ', whereClause)
+//   const tabsQuery = `
+//     SELECT 
+//       wk.key_name as value,
+//       COUNT(DISTINCT h.id) as host_count
+//     FROM hosts h
+//     INNER JOIN whois w ON h.id = w.host_id
+//     INNER JOIN whois_keys wk ON w.key_id = wk.id
+//     ${whereClause}
+//     GROUP BY wk.key_name
+//     ORDER BY wk.key_name ASC
+//   `;
+
+//   const tabs = await sequelize.query(tabsQuery, {
+//     replacements,
+//     type: sequelize.QueryTypes.SELECT,
+//   });
+
+//   if (tabs.length === 0) {
+//     return {
+//       items: [],
+//       pagination: {
+//         currentPage: pageNum,
+//         totalPages: 0,
+//         totalItems: 0,
+//         hasNext: false,
+//         hasPrev: false,
+//       },
+//       tabs: []
+//     };
+//   }
+
+//   // Получаем данные для первого ключевого слова
+//   const firstKeyword = tabs[0];
+//   const keywordName = groupValue ?? firstKeyword.value;
+
+//   // Основной запрос с правильным JOIN для фильтрации по ключевому слову
+//   const hostsQuery = `
+//     WITH hosts_with_keyword AS (
+//       SELECT DISTINCT h.id
+//       FROM hosts h
+//       INNER JOIN whois w ON h.id = w.host_id
+//       INNER JOIN whois_keys wk ON w.key_id = wk.id
+//       ${whereClause ? whereClause + ' AND wk.key_name = :keywordName' : 'WHERE wk.key_name = :keywordName'}
+//     ),
+//     sorted_hosts AS (
+//       SELECT 
+//         h.id,
+//         ROW_NUMBER() OVER (
+//           ORDER BY 
+//             CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+//             h.priority_id DESC NULLS LAST,
+//             h.updated_at DESC
+//         ) as rn
+//       FROM hosts h
+//       WHERE h.id IN (SELECT id FROM hosts_with_keyword)
+//     ),
+//     paginated_hosts AS (
+//       SELECT id FROM sorted_hosts
+//       WHERE rn > :offset AND rn <= :offsetPlusLimit
+//       ORDER BY rn
+//     ),
+//     host_details AS (
+//       SELECT 
+//         h.id,
+//         h.ip,
+//         h.reachable,
+//         TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+//         h.priority_id,
+//         h.grouping_id,
+//         h.country_id,
+//         hp.name as priority_name,
+//         hg.name as grouping_name,
+//         c.name as country_name,
+//         (
+//           SELECT COALESCE(
+//             json_agg(
+//               json_build_object(
+//                 'port', p.port,
+//                 'type', p.type,
+//                 'port_name', wkp.name
+//               )
+//               ORDER BY p.port
+//             ),
+//             '[]'::json
+//           )
+//           FROM ports p
+//           LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+//           WHERE p.host_id = h.id
+//         ) as ports_json,
+//         TRUE as has_whois,
+//         sh.rn
+//       FROM hosts h
+//       INNER JOIN paginated_hosts ph ON h.id = ph.id
+//       INNER JOIN sorted_hosts sh ON h.id = sh.id
+//       LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+//       LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+//       LEFT JOIN countries c ON h.country_id = c.id
+//     ),
+//     total_count AS (
+//       SELECT COUNT(*) as total_count
+//       FROM hosts_with_keyword
+//     )
+//     SELECT 
+//       hd.*,
+//       tc.total_count
+//     FROM host_details hd
+//     CROSS JOIN total_count tc
+//     ORDER BY hd.rn
+//   `;
+
+//   const hosts = await sequelize.query(hostsQuery, {
+//     replacements: {
+//       ...replacements,
+//       keywordName,
+//       offset: offset,
+//       offsetPlusLimit: offset + limitNum,
+//     },
+//     type: sequelize.QueryTypes.SELECT,
+//   });
+
+//   if (hosts.length === 0) {
+//     return {
+//       items: [],
+//       pagination: {
+//         currentPage: pageNum,
+//         totalPages: 0,
+//         totalItems: 0,
+//         hasNext: false,
+//         hasPrev: false,
+//       },
+//       tabs
+//     };
+//   }
+
+//   const totalItems = parseInt(hosts[0]?.total_count || 0);
+//   const totalPages = Math.ceil(totalItems / limitNum);
+//   const items = hosts.map(host => {
+//     const formatted = formatHostFromRaw(host);
+//     delete formatted.rn;
+//     return formatted;
+//   });
+
+//   return {
+//     items,
+//     pagination: {
+//       currentPage: pageNum,
+//       totalPages: totalPages,
+//       totalItems: totalItems,
+//       hasNext: pageNum < totalPages,
+//       hasPrev: pageNum > 1,
+//     },
+//     tabs
+//   };
 // }
 
 // // Группировка по приоритету
-// async function groupByPriority(hosts) {
-//   const priorityMap = new Map();
+// async function groupByPriority(whereClause, replacements, pageNum, limitNum, offset, groupValue) {
+//   const tabsQuery = `
+//     SELECT 
+//       hp.name as value,
+//       COUNT(DISTINCT h.id) as host_count
+//     FROM hosts h
+//     LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+//     ${whereClause}
+//     GROUP BY hp.name
+//     ORDER BY hp.name ASC
+//   `;
 
-//   hosts.forEach((host) => {
-//     const priorityId = host.priority_info.priority?.id || 0;
-//     const priorityName = host.priority_info.priority?.name || "Без приоритета";
-
-//     if (!priorityMap.has(priorityId)) {
-//       priorityMap.set(priorityId, {
-//         id: priorityId,
-//         name: priorityName,
-//         count: 0,
-//         items: [],
-//       });
-//     }
-
-//     const group = priorityMap.get(priorityId);
-//     group.items.push(host);
-//     group.count++;
+//   const tabs = await sequelize.query(tabsQuery, {
+//     replacements,
+//     type: sequelize.QueryTypes.SELECT,
 //   });
 
-//   return Array.from(priorityMap.values())
-//     .sort((a, b) => b.id - a.id) // Сортировка по убыванию приоритета
-//     .map((group) => ({
-//       ...group,
+//   if (tabs.length === 0) {
+//     return {
+//       items: [],
 //       pagination: {
-//         currentPage: 1,
-//         totalPages: Math.ceil(group.items.length / 10),
-//         totalItems: group.items.length,
-//         hasNext: group.items.length > 10,
+//         currentPage: pageNum,
+//         totalPages: 0,
+//         totalItems: 0,
+//         hasNext: false,
 //         hasPrev: false,
 //       },
-//       items: group.items.slice(0, 10),
-//     }));
-// }
+//       tabs: []
+//     };
+//   }
 
-// // Группировка по группе хостов
-// async function groupByHostGroup(hosts) {
-//   const groupMap = new Map();
-
-//   hosts.forEach((host) => {
-//     const groupId = host.priority_info.grouping?.id || 0;
-//     const groupName =
-//       host.priority_info.grouping?.name || "Неопределенная группа";
-
-//     if (!groupMap.has(groupId)) {
-//       groupMap.set(groupId, {
-//         id: groupId,
-//         name: groupName,
-//         count: 0,
-//         items: [],
-//       });
-//     }
-
-//     const group = groupMap.get(groupId);
-//     group.items.push(host);
-//     group.count++;
-//   });
-
-//   return Array.from(groupMap.values())
-//     .sort((a, b) => a.name.localeCompare(b.name))
-//     .map((group) => ({
-//       ...group,
-//       pagination: {
-//         currentPage: 1,
-//         totalPages: Math.ceil(group.items.length / 10),
-//         totalItems: group.items.length,
-//         hasNext: group.items.length > 10,
-//         hasPrev: false,
-//       },
-//       items: group.items.slice(0, 10),
-//     }));
-// }
-
-// // Группировка по стране
-// async function groupByCountry(hosts) {
-//   const countryMap = new Map();
-
-//   hosts.forEach((host) => {
-//     const countryId = host.country_info?.id || 0;
-//     const countryName = host.country_info?.name || "Неизвестная страна";
-
-//     if (!countryMap.has(countryId)) {
-//       countryMap.set(countryId, {
-//         id: countryId,
-//         name: countryName,
-//         count: 0,
-//         items: [],
-//       });
-//     }
-
-//     const group = countryMap.get(countryId);
-//     group.items.push(host);
-//     group.count++;
-//   });
-
-//   return Array.from(countryMap.values())
-//     .sort((a, b) => a.name.localeCompare(b.name))
-//     .map((group) => ({
-//       ...group,
-//       pagination: {
-//         currentPage: 1,
-//         totalPages: Math.ceil(group.items.length / 10),
-//         totalItems: group.items.length,
-//         hasNext: group.items.length > 10,
-//         hasPrev: false,
-//       },
-//       items: group.items.slice(0, 10),
-//     }));
-// }
-
-// // Группировка по ключевым словам оптимизированный
-// async function groupByKeywords(hosts) {
-//   try {
-//     if (!hosts || hosts.length === 0) {
-//       return [];
-//     }
-
-//     // Создаем Map для быстрого поиска хостов по ID
-//     const hostsMap = new Map();
-//     hosts.forEach(host => {
-//       hostsMap.set(host.id, host);
-//     });
-
-//     // Получаем ID всех отфильтрованных хостов
-//     const hostIds = hosts.map(host => host.id);
-
-//     // Используем один SQL запрос для получения всех необходимых данных
-//     const keywordDataSql = `
-//       WITH host_keywords AS (
-//         SELECT 
-//           w.host_id,
-//           wk.key_name,
-//           COUNT(*) OVER (PARTITION BY wk.key_name) as total_count
-//         FROM whois w
-//         INNER JOIN whois_keys wk ON w.key_id = wk.id
-//         WHERE w.host_id IN (:hostIds)
-//         GROUP BY w.host_id, wk.key_name
-//         ORDER BY wk.key_name ASC
-//       )
+//   // Поскольку приоритеты обычно немного, показываем все хосты с пагинацией
+//   const hostsQuery = `
+//     WITH sorted_hosts AS (
 //       SELECT 
-//         key_name,
-//         total_count,
-//         ARRAY_AGG(host_id) as host_ids
-//       FROM host_keywords
-//       GROUP BY key_name, total_count
-//       ORDER BY key_name ASC
-//     `;
+//         h.id,
+//         ROW_NUMBER() OVER (
+//           ORDER BY 
+//             CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+//             h.priority_id DESC NULLS LAST,
+//             h.updated_at DESC
+//         ) as rn
+//       FROM hosts h
+//       LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+//       ${whereClause}
+//     ),
+//     paginated_hosts AS (
+//       SELECT id FROM sorted_hosts
+//       WHERE rn > :offset AND rn <= :offsetPlusLimit
+//       ORDER BY rn
+//     ),
+//     host_details AS (
+//       SELECT 
+//         h.id,
+//         h.ip,
+//         h.reachable,
+//         TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+//         h.priority_id,
+//         h.grouping_id,
+//         h.country_id,
+//         hp.name as priority_name,
+//         hg.name as grouping_name,
+//         c.name as country_name,
+//         (
+//           SELECT COALESCE(
+//             json_agg(
+//               json_build_object(
+//                 'port', p.port,
+//                 'type', p.type,
+//                 'port_name', wkp.name
+//               )
+//               ORDER BY p.port
+//             ),
+//             '[]'::json
+//           )
+//           FROM ports p
+//           LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+//           WHERE p.host_id = h.id
+//         ) as ports_json,
+//         EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois
+//       FROM hosts h
+//       INNER JOIN paginated_hosts ph ON h.id = ph.id
+//       LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+//       LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+//       LEFT JOIN countries c ON h.country_id = c.id
+//     ),
+//     total_count AS (
+//       SELECT COUNT(DISTINCT h.id) as total_count
+//       FROM hosts h
+//       LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+//       ${whereClause}
+//     )
+//     SELECT 
+//       hd.*,
+//       tc.total_count
+//     FROM host_details hd
+//     CROSS JOIN total_count tc
+//     ORDER BY (
+//       SELECT rn FROM sorted_hosts sh WHERE sh.id = hd.id
+//     )
+//   `;
 
-//     const keywordGroupsResult = await sequelize.query(keywordDataSql, {
-//       replacements: { hostIds },
-//       type: sequelize.QueryTypes.SELECT,
-//     });
+//   const hosts = await sequelize.query(hostsQuery, {
+//     replacements: {
+//       ...replacements,
+//       offset: offset,
+//       offsetPlusLimit: offset + limitNum,
+//     },
+//     type: sequelize.QueryTypes.SELECT,
+//   });
 
-//     // Если нет данных WHOIS, возвращаем пустой массив
-//     if (!keywordGroupsResult.length) {
-//       return [];
-//     }
-
-//     // Собираем группы
-//     const groups = keywordGroupsResult.map(row => {
-//       const keyword = row.key_name;
-//       const totalCount = parseInt(row.total_count);
-//       const hostIdArray = row.host_ids || [];
-      
-//       // Получаем хосты для этой группы (первые 10)
-//       const groupHosts = [];
-//       const addedHostIds = new Set();
-      
-//       for (const hostId of hostIdArray) {
-//         if (groupHosts.length >= 10) break;
-        
-//         const host = hostsMap.get(hostId);
-//         if (host && !addedHostIds.has(hostId)) {
-//           groupHosts.push(host);
-//           addedHostIds.add(hostId);
-//         }
-//       }
-      
-//       // Сортируем хосты внутри группы по приоритету и дате
-//       groupHosts.sort((a, b) => {
-//         const priorityA = a.priority_info?.priority?.id || 0;
-//         const priorityB = b.priority_info?.priority?.id || 0;
-        
-//         if (priorityB !== priorityA) {
-//           return priorityB - priorityA;
-//         }
-        
-//         if (a.updated_at && b.updated_at) {
-//           return new Date(b.updated_at) - new Date(a.updated_at);
-//         }
-        
-//         return 0;
-//       });
-
-//       const totalItemsInGroup = Math.min(totalCount, hostIdArray.length);
-//       const totalPagesInGroup = Math.ceil(totalItemsInGroup / 10);
-
-//       return {
-//         keyword: keyword,
-//         name: keyword,
-//         count: totalCount,
-//         items: groupHosts,
-//         pagination: {
-//           currentPage: 1,
-//           totalPages: totalPagesInGroup,
-//           totalItems: totalItemsInGroup,
-//           hasNext: totalItemsInGroup > 10,
-//           hasPrev: false,
-//         },
-//       };
-//     });
-
-//     // Фильтруем пустые группы и возвращаем результат
-//     return groups.filter(group => group.items.length > 0);
-
-//   } catch (error) {
-//     console.error("Ошибка в groupByKeywords:", error);
-//     return [];
+//   if (hosts.length === 0) {
+//     return {
+//       items: [],
+//       pagination: {
+//         currentPage: pageNum,
+//         totalPages: 0,
+//         totalItems: 0,
+//         hasNext: false,
+//         hasPrev: false,
+//       },
+//       tabs
+//     };
 //   }
+//   console.log('hosts[0] >> ', hosts[0])
+//   const totalItems = parseInt(hosts[0]?.total_count || 0);
+//   const totalPages = Math.ceil(totalItems / limitNum);
+//   const items = hosts.map(formatHostFromRaw);
+
+//   return {
+//     items,
+//     pagination: {
+//       currentPage: pageNum,
+//       totalPages: totalPages,
+//       totalItems: totalItems,
+//       hasNext: pageNum < totalPages,
+//       hasPrev: pageNum > 1,
+//     },
+//     tabs
+//   };
 // }
 
-// // страый рабочий
-// //// Группировка по ключевым словам
-// // async function groupByKeywords(hosts) {
-// //   try {
-// //     // Получаем ID всех отфильтрованных хостов
-// //     const hostIds = hosts.map((host) => host.id);
+// // Группировка по группам хостов
+// async function groupByHostGroup(whereClause, replacements, pageNum, limitNum, offset, groupValue) {
+//   const tabsQuery = `
+//     SELECT 
+//       hg.name as value,
+//       COUNT(DISTINCT h.id) as host_count
+//     FROM hosts h
+//     LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+//     ${whereClause}
+//     GROUP BY hg.name
+//     ORDER BY hg.name ASC
+//   `;
 
-// //     if (!hostIds.length) {
-// //       return [];
-// //     }
+//   const tabs = await sequelize.query(tabsQuery, {
+//     replacements,
+//     type: sequelize.QueryTypes.SELECT,
+//   });
 
-// //     // Используем raw SQL для получения уникальных ключевых слов с подсчетом хостов
-// //     const uniqueKeywordsSql = `
-// //       SELECT DISTINCT wk.key_name, COUNT(DISTINCT w.host_id) as count
-// //       FROM whois_keys wk
-// //       INNER JOIN whois w ON wk.id = w.key_id
-// //       WHERE w.host_id IN (:hostIds)
-// //       GROUP BY wk.key_name
-// //       ORDER BY wk.key_name ASC
-// //     `;
-
-// //     const uniqueKeywordsResult = await sequelize.query(uniqueKeywordsSql, {
-// //       replacements: { hostIds },
-// //       type: sequelize.QueryTypes.SELECT,
-// //     });
-
-// //     // Получаем полные WHOIS данные для хостов с группировкой по ключевым словам
-// //     const hostsWithWhois = await Host.findAll({
-// //       include: [
-// //         {
-// //           model: Port,
-// //           attributes: ["port", "type"],
-// //           include: [
-// //             {
-// //               model: WellKnownPort,
-// //               attributes: ["name"],
-// //               required: false,
-// //             },
-// //           ],
-// //         },
-// //         {
-// //           model: Priority,
-// //           attributes: ["id", "name"],
-// //           required: false,
-// //         },
-// //         {
-// //           model: Grouping,
-// //           attributes: ["id", "name"],
-// //           required: false,
-// //         },
-// //         {
-// //           model: Country,
-// //           attributes: ["id", "name"],
-// //           required: false,
-// //         },
-// //         {
-// //           model: Whois,
-// //           attributes: ["value"],
-// //           include: [
-// //             {
-// //               model: WhoisKey,
-// //               attributes: ["key_name"],
-// //               required: false,
-// //             },
-// //           ],
-// //           required: false,
-// //         },
-// //       ],
-// //       where: {
-// //         id: { [Op.in]: hostIds },
-// //       },
-// //       order: [
-// //         ["priority_id", "DESC"],
-// //         ["updated_at", "DESC"],
-// //       ],
-// //     });
-
-// //     // Форматируем данные хостов (используем ту же функцию formatHostData)
-// //     const formattedHostsMap = new Map();
-// //     hostsWithWhois.forEach((host) => {
-// //       if (!formattedHostsMap.has(host.id)) {
-// //         formattedHostsMap.set(host.id, formatHostData(host));
-// //       }
-// //     });
-
-// //     // Инициализируем группы для всех уникальных ключевых слов
-// //     const keywordGroups = {};
-
-// //     uniqueKeywordsResult.forEach((row) => {
-// //       const keyword = row.key_name;
-// //       const count = parseInt(row.count);
-// //       keywordGroups[keyword] = {
-// //         keyword: keyword,
-// //         count: count,
-// //         items: [],
-// //       };
-// //     });
-
-// //     // Группируем хосты по ключевым словам через WHOIS данные
-// //     for (const host of hostsWithWhois) {
-// //       const formattedHost = formattedHostsMap.get(host.id);
-// //       const hostWhois = host.Whois || [];
-      
-// //       if (formattedHost && hostWhois.length > 0) {
-// //         for (const whois of hostWhois) {
-// //           const keyName = whois.WhoisKey?.key_name;
-
-// //           if (keyName && keywordGroups[keyName]) {
-// //             // Проверяем, что хост еще не добавлен в эту группу
-// //             const hostExists = keywordGroups[keyName].items.some(
-// //               (item) => item.id === formattedHost.id
-// //             );
-
-// //             if (!hostExists) {
-// //               keywordGroups[keyName].items.push(formattedHost);
-// //             }
-// //           }
-// //         }
-// //       }
-// //     }
-
-// //     // Сортируем хосты внутри каждой группы по приоритету и дате
-// //     Object.values(keywordGroups).forEach((group) => {
-// //       group.items.sort((a, b) => {
-// //         // Сначала сортируем по приоритету (DESC)
-// //         const priorityA = a.priority_info?.priority?.id || 0;
-// //         const priorityB = b.priority_info?.priority?.id || 0;
-
-// //         if (priorityB !== priorityA) {
-// //           return priorityB - priorityA;
-// //         }
-
-// //         // Если приоритеты одинаковые, сортируем по дате обновления
-// //         if (a.updated_at && b.updated_at) {
-// //           return new Date(b.updated_at) - new Date(a.updated_at);
-// //         }
-
-// //         return 0;
-// //       });
-// //     });
-
-// //     // Преобразуем в нужный формат и сортируем по возрастанию ключевых слов
-// //     const groups = Object.values(keywordGroups)
-// //       .filter((group) => group.items.length > 0)
-// //       .map((group) => {
-// //         const totalItemsInGroup = group.items.length;
-// //         const totalPagesInGroup = Math.ceil(totalItemsInGroup / 10); // 10 хостов на страницу внутри группы
-
-// //         return {
-// //           keyword: group.keyword,
-// //           count: group.count,
-// //           name: group.keyword, // Добавляем name для совместимости
-// //           items: group.items.slice(0, 10), // Первые 10 хостов для отображения
-// //           pagination: {
-// //             currentPage: 1,
-// //             totalPages: totalPagesInGroup,
-// //             totalItems: totalItemsInGroup,
-// //             hasNext: totalItemsInGroup > 10,
-// //             hasPrev: false,
-// //           },
-// //         };
-// //       })
-// //       .sort((a, b) => a.keyword.localeCompare(b.keyword));
-
-// //     return groups;
-// //   } catch (error) {
-// //     console.error("Ошибка в groupByKeywords:", error);
-// //     return [];
-// //   }
-// // }
-
-
-
-// // Группировка по наличию WHOIS
-// async function groupByWhois(hosts) {
-//   const withWhois = hosts.filter((h) => h.has_whois);
-//   const withoutWhois = hosts.filter((h) => !h.has_whois);
-
-//   const groups = [];
-
-//   if (withWhois.length > 0) {
-//     groups.push({
-//       name: "С WHOIS данными",
-//       count: withWhois.length,
-//       items: withWhois.slice(0, 10),
+//   if (tabs.length === 0) {
+//     return {
+//       items: [],
 //       pagination: {
-//         currentPage: 1,
-//         totalPages: Math.ceil(withWhois.length / 10),
-//         totalItems: withWhois.length,
-//         hasNext: withWhois.length > 10,
+//         currentPage: pageNum,
+//         totalPages: 0,
+//         totalItems: 0,
+//         hasNext: false,
 //         hasPrev: false,
 //       },
-//     });
+//       tabs: []
+//     };
 //   }
 
-//   if (withoutWhois.length > 0) {
-//     groups.push({
-//       name: "Без WHOIS данных",
-//       count: withoutWhois.length,
-//       items: withoutWhois.slice(0, 10),
+//   const hostsQuery = `
+//     WITH sorted_hosts AS (
+//       SELECT 
+//         h.id,
+//         ROW_NUMBER() OVER (
+//           ORDER BY 
+//             CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+//             h.priority_id DESC NULLS LAST,
+//             h.updated_at DESC
+//         ) as rn
+//       FROM hosts h
+//       LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+//       ${whereClause}
+//     ),
+//     paginated_hosts AS (
+//       SELECT id FROM sorted_hosts
+//       WHERE rn > :offset AND rn <= :offsetPlusLimit
+//       ORDER BY rn
+//     ),
+//     host_details AS (
+//       SELECT 
+//         h.id,
+//         h.ip,
+//         h.reachable,
+//         TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+//         h.priority_id,
+//         h.grouping_id,
+//         h.country_id,
+//         hp.name as priority_name,
+//         hg.name as grouping_name,
+//         c.name as country_name,
+//         (
+//           SELECT COALESCE(
+//             json_agg(
+//               json_build_object(
+//                 'port', p.port,
+//                 'type', p.type,
+//                 'port_name', wkp.name
+//               )
+//               ORDER BY p.port
+//             ),
+//             '[]'::json
+//           )
+//           FROM ports p
+//           LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+//           WHERE p.host_id = h.id
+//         ) as ports_json,
+//         EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois
+//       FROM hosts h
+//       INNER JOIN paginated_hosts ph ON h.id = ph.id
+//       LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+//       LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+//       LEFT JOIN countries c ON h.country_id = c.id
+//     ),
+//     total_count AS (
+//       SELECT COUNT(DISTINCT h.id) as total_count
+//       FROM hosts h
+//       LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+//       ${whereClause}
+//     )
+//     SELECT 
+//       hd.*,
+//       tc.total_count
+//     FROM host_details hd
+//     CROSS JOIN total_count tc
+//     ORDER BY (
+//       SELECT rn FROM sorted_hosts sh WHERE sh.id = hd.id
+//     )
+//   `;
+
+//   const hosts = await sequelize.query(hostsQuery, {
+//     replacements: {
+//       ...replacements,
+//       offset: offset,
+//       offsetPlusLimit: offset + limitNum,
+//     },
+//     type: sequelize.QueryTypes.SELECT,
+//   });
+
+//   if (hosts.length === 0) {
+//     return {
+//       items: [],
 //       pagination: {
-//         currentPage: 1,
-//         totalPages: Math.ceil(withoutWhois.length / 10),
-//         totalItems: withoutWhois.length,
-//         hasNext: withoutWhois.length > 10,
+//         currentPage: pageNum,
+//         totalPages: 0,
+//         totalItems: 0,
+//         hasNext: false,
 //         hasPrev: false,
 //       },
-//     });
+//       tabs
+//     };
 //   }
 
-//   return groups;
+//   const totalItems = parseInt(hosts[0]?.total_count || 0);
+//   const totalPages = Math.ceil(totalItems / limitNum);
+//   const items = hosts.map(formatHostFromRaw);
+
+//   return {
+//     items,
+//     pagination: {
+//       currentPage: pageNum,
+//       totalPages: totalPages,
+//       totalItems: totalItems,
+//       hasNext: pageNum < totalPages,
+//       hasPrev: pageNum > 1,
+//     },
+//     tabs
+//   };
+// }
+
+// // Группировка по странам
+// async function groupByCountry(whereClause, replacements, pageNum, limitNum, offset, groupValue) {
+//   const tabsQuery = `
+//     SELECT 
+//       c.name as value,
+//       COUNT(DISTINCT h.id) as host_count
+//     FROM hosts h
+//     LEFT JOIN countries c ON h.country_id = c.id
+//     ${whereClause}
+//     GROUP BY c.name
+//     ORDER BY c.name ASC
+//   `;
+
+//   const tabs = await sequelize.query(tabsQuery, {
+//     replacements,
+//     type: sequelize.QueryTypes.SELECT,
+//   });
+
+//   if (tabs.length === 0) {
+//     return {
+//       items: [],
+//       pagination: {
+//         currentPage: pageNum,
+//         totalPages: 0,
+//         totalItems: 0,
+//         hasNext: false,
+//         hasPrev: false,
+//       },
+//       tabs: []
+//     };
+//   }
+
+//   const hostsQuery = `
+//     WITH sorted_hosts AS (
+//       SELECT 
+//         h.id,
+//         ROW_NUMBER() OVER (
+//           ORDER BY 
+//             CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+//             h.priority_id DESC NULLS LAST,
+//             h.updated_at DESC
+//         ) as rn
+//       FROM hosts h
+//       LEFT JOIN countries c ON h.country_id = c.id
+//       ${whereClause}
+//     ),
+//     paginated_hosts AS (
+//       SELECT id FROM sorted_hosts
+//       WHERE rn > :offset AND rn <= :offsetPlusLimit
+//       ORDER BY rn
+//     ),
+//     host_details AS (
+//       SELECT 
+//         h.id,
+//         h.ip,
+//         h.reachable,
+//         TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+//         h.priority_id,
+//         h.grouping_id,
+//         h.country_id,
+//         hp.name as priority_name,
+//         hg.name as grouping_name,
+//         c.name as country_name,
+//         (
+//           SELECT COALESCE(
+//             json_agg(
+//               json_build_object(
+//                 'port', p.port,
+//                 'type', p.type,
+//                 'port_name', wkp.name
+//               )
+//               ORDER BY p.port
+//             ),
+//             '[]'::json
+//           )
+//           FROM ports p
+//           LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+//           WHERE p.host_id = h.id
+//         ) as ports_json,
+//         EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois
+//       FROM hosts h
+//       INNER JOIN paginated_hosts ph ON h.id = ph.id
+//       LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+//       LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+//       LEFT JOIN countries c ON h.country_id = c.id
+//     ),
+//     total_count AS (
+//       SELECT COUNT(DISTINCT h.id) as total_count
+//       FROM hosts h
+//       LEFT JOIN countries c ON h.country_id = c.id
+//       ${whereClause}
+//     )
+//     SELECT 
+//       hd.*,
+//       tc.total_count
+//     FROM host_details hd
+//     CROSS JOIN total_count tc
+//     ORDER BY (
+//       SELECT rn FROM sorted_hosts sh WHERE sh.id = hd.id
+//     )
+//   `;
+
+//   const hosts = await sequelize.query(hostsQuery, {
+//     replacements: {
+//       ...replacements,
+//       offset: offset,
+//       offsetPlusLimit: offset + limitNum,
+//     },
+//     type: sequelize.QueryTypes.SELECT,
+//   });
+
+//   if (hosts.length === 0) {
+//     return {
+//       items: [],
+//       pagination: {
+//         currentPage: pageNum,
+//         totalPages: 0,
+//         totalItems: 0,
+//         hasNext: false,
+//         hasPrev: false,
+//       },
+//       tabs
+//     };
+//   }
+
+//   const totalItems = parseInt(hosts[0]?.total_count || 0);
+//   const totalPages = Math.ceil(totalItems / limitNum);
+//   const items = hosts.map(formatHostFromRaw);
+
+//   return {
+//     items,
+//     pagination: {
+//       currentPage: pageNum,
+//       totalPages: totalPages,
+//       totalItems: totalItems,
+//       hasNext: pageNum < totalPages,
+//       hasPrev: pageNum > 1,
+//     },
+//     tabs
+//   };
+// }
+
+// // Группировка по WHOIS
+// async function groupByWhois(whereClause, replacements, pageNum, limitNum, offset, groupValue) {
+//   const tabs = [
+//     { value: 'С WHOIS данными', host_count: 0 },
+//     { value: 'Без WHOIS данных', host_count: 0 }
+//   ];
+
+//   const hostsQuery = `
+//     WITH sorted_hosts AS (
+//       SELECT 
+//         h.id,
+//         CASE 
+//           WHEN EXISTS (SELECT 1 FROM whois w WHERE w.host_id = h.id) THEN 'С WHOIS данными'
+//           ELSE 'Без WHOIS данных'
+//         END as whois_status,
+//         ROW_NUMBER() OVER (
+//           PARTITION BY 
+//             CASE 
+//               WHEN EXISTS (SELECT 1 FROM whois w WHERE w.host_id = h.id) THEN 'С WHOIS данными'
+//               ELSE 'Без WHOIS данных'
+//             END
+//           ORDER BY 
+//             CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+//             h.priority_id DESC NULLS LAST,
+//             h.updated_at DESC
+//         ) as rn
+//       FROM hosts h
+//       ${whereClause}
+//     ),
+//     paginated_hosts AS (
+//       SELECT id, whois_status FROM sorted_hosts
+//       WHERE rn > :offset AND rn <= :offsetPlusLimit
+//       ORDER BY whois_status, rn
+//     ),
+//     host_details AS (
+//       SELECT 
+//         h.id,
+//         h.ip,
+//         h.reachable,
+//         TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+//         h.priority_id,
+//         h.grouping_id,
+//         h.country_id,
+//         hp.name as priority_name,
+//         hg.name as grouping_name,
+//         c.name as country_name,
+//         (
+//           SELECT COALESCE(
+//             json_agg(
+//               json_build_object(
+//                 'port', p.port,
+//                 'type', p.type,
+//                 'port_name', wkp.name
+//               )
+//               ORDER BY p.port
+//             ),
+//             '[]'::json
+//           )
+//           FROM ports p
+//           LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+//           WHERE p.host_id = h.id
+//         ) as ports_json,
+//         EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois,
+//         ph.whois_status
+//       FROM hosts h
+//       INNER JOIN paginated_hosts ph ON h.id = ph.id
+//       LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+//       LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+//       LEFT JOIN countries c ON h.country_id = c.id
+//     ),
+//     total_count AS (
+//       SELECT 
+//         CASE 
+//           WHEN EXISTS (SELECT 1 FROM whois w WHERE w.host_id = h.id) THEN 'С WHOIS данными'
+//           ELSE 'Без WHOIS данных'
+//         END as whois_status,
+//         COUNT(*) as total_count
+//       FROM hosts h
+//       ${whereClause}
+//       GROUP BY 
+//         CASE 
+//           WHEN EXISTS (SELECT 1 FROM whois w WHERE w.host_id = h.id) THEN 'С WHOIS данными'
+//           ELSE 'Без WHOIS данных'
+//         END
+//     )
+//     SELECT 
+//       hd.*,
+//       tc.total_count
+//     FROM host_details hd
+//     CROSS JOIN total_count tc
+//     WHERE tc.whois_status = hd.whois_status
+//     ORDER BY hd.whois_status, (
+//       SELECT rn FROM sorted_hosts sh WHERE sh.id = hd.id
+//     )
+//   `;
+
+//   const hosts = await sequelize.query(hostsQuery, {
+//     replacements: {
+//       ...replacements,
+//       offset: offset,
+//       offsetPlusLimit: offset + limitNum,
+//     },
+//     type: sequelize.QueryTypes.SELECT,
+//   });
+
+//   if (hosts.length === 0) {
+//     return {
+//       items: [],
+//       pagination: {
+//         currentPage: pageNum,
+//         totalPages: 0,
+//         totalItems: 0,
+//         hasNext: false,
+//         hasPrev: false,
+//       },
+//       tabs: []
+//     };
+//   }
+
+//   const totalItems = hosts.reduce((sum, host) => sum + (parseInt(host.total_count) || 0), 0);
+//   const totalPages = Math.ceil(totalItems / limitNum);
+//   const items = hosts.map(formatHostFromRaw);
+
+//   return {
+//     items,
+//     pagination: {
+//       currentPage: pageNum,
+//       totalPages: totalPages,
+//       totalItems: totalItems,
+//       hasNext: pageNum < totalPages,
+//       hasPrev: pageNum > 1,
+//     },
+//     tabs: tabs.filter(tab => {
+//       const count = hosts.find(h => h.has_whois === (tab.value === 'С WHOIS данными'))?.total_count || 0;
+//       return count > 0;
+//     })
+//   };
+// }
+
+// // Получение всех хостов (без группировки)
+// async function getAllHosts(whereClause, replacements, pageNum, limitNum, offset, groupValue) {
+//   const hostsQuery = `
+//     WITH sorted_hosts AS (
+//       SELECT 
+//         h.id,
+//         ROW_NUMBER() OVER (
+//           ORDER BY 
+//             CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+//             h.priority_id DESC NULLS LAST,
+//             h.updated_at DESC
+//         ) as rn
+//       FROM hosts h
+//       ${whereClause}
+//     ),
+//     paginated_hosts AS (
+//       SELECT id FROM sorted_hosts
+//       WHERE rn > :offset AND rn <= :offsetPlusLimit
+//       ORDER BY rn
+//     ),
+//     host_details AS (
+//       SELECT 
+//         h.id,
+//         h.ip,
+//         h.reachable,
+//         TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+//         h.priority_id,
+//         h.grouping_id,
+//         h.country_id,
+//         hp.name as priority_name,
+//         hg.name as grouping_name,
+//         c.name as country_name,
+//         (
+//           SELECT COALESCE(
+//             json_agg(
+//               json_build_object(
+//                 'port', p.port,
+//                 'type', p.type,
+//                 'port_name', wkp.name
+//               )
+//               ORDER BY p.port
+//             ),
+//             '[]'::json
+//           )
+//           FROM ports p
+//           LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+//           WHERE p.host_id = h.id
+//         ) as ports_json,
+//         EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois
+//       FROM hosts h
+//       INNER JOIN paginated_hosts ph ON h.id = ph.id
+//       LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+//       LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+//       LEFT JOIN countries c ON h.country_id = c.id
+//     ),
+//     total_count AS (
+//       SELECT COUNT(DISTINCT h.id) as total_count
+//       FROM hosts h
+//       ${whereClause}
+//     )
+//     SELECT 
+//       hd.*,
+//       tc.total_count
+//     FROM host_details hd
+//     CROSS JOIN total_count tc
+//     ORDER BY (
+//       SELECT rn FROM sorted_hosts sh WHERE sh.id = hd.id
+//     )
+//   `;
+
+//   const hosts = await sequelize.query(hostsQuery, {
+//     replacements: {
+//       ...replacements,
+//       offset: offset,
+//       offsetPlusLimit: offset + limitNum,
+//     },
+//     type: sequelize.QueryTypes.SELECT,
+//   });
+
+//   if (hosts.length === 0) {
+//     return {
+//       items: [],
+//       pagination: {
+//         currentPage: pageNum,
+//         totalPages: 0,
+//         totalItems: 0,
+//         hasNext: false,
+//         hasPrev: false,
+//       },
+//       tabs: []
+//     };
+//   }
+
+//   const totalItems = parseInt(hosts[0]?.total_count || 0);
+//   const totalPages = Math.ceil(totalItems / limitNum);
+//   const items = hosts.map(formatHostFromRaw);
+
+//   return {
+//     items,
+//     pagination: {
+//       currentPage: pageNum,
+//       totalPages: totalPages,
+//       totalItems: totalItems,
+//       hasNext: pageNum < totalPages,
+//       hasPrev: pageNum > 1,
+//     },
+//     tabs: []
+//   };
 // }
 
 // // Функция для получения данных по группе с пагинацией
 // export const getGroupDetails = async (req, res) => {
-//   const { group, page = 1, limit = 10 } = req.query;
-//   const pageNum = Math.max(1, parseInt(page) || 1);
-//   const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
-//   const offset = (pageNum - 1) * limitNum;
-
 //   try {
-//     // Ищем группу по имени
-//     const groupData = await Grouping.findOne({
-//       where: { name: group },
-//       attributes: ["id", "name"],
-//       raw: true,
-//     });
+//     const { group, page = 1, limit = 10 } = req.query;
+//     const { pageNum, limitNum, offset } = paginate(req);
 
-//     if (!groupData) {
-//       return res.status(404).json({ error: "Группа не найдена" });
-//     }
+//     const hostsQuery = `
+//       WITH sorted_hosts AS (
+//         SELECT 
+//           h.id,
+//           ROW_NUMBER() OVER (
+//             ORDER BY 
+//               CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+//               h.priority_id DESC NULLS LAST,
+//               h.updated_at DESC
+//           ) as rn
+//         FROM hosts h
+//         INNER JOIN host_groupings hg ON h.grouping_id = hg.id
+//         WHERE hg.name = :groupName
+//       ),
+//       paginated_hosts AS (
+//         SELECT id FROM sorted_hosts
+//         WHERE rn > :offset AND rn <= :offsetPlusLimit
+//         ORDER BY rn
+//       ),
+//       host_details AS (
+//         SELECT 
+//           h.id,
+//           h.ip,
+//           h.reachable,
+//           TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+//           h.priority_id,
+//           h.grouping_id,
+//           h.country_id,
+//           hp.name as priority_name,
+//           hg.name as grouping_name,
+//           c.name as country_name,
+//           (
+//             SELECT COALESCE(
+//               json_agg(
+//                 json_build_object(
+//                   'port', p.port,
+//                   'type', p.type,
+//                   'port_name', wkp.name
+//                 )
+//                 ORDER BY p.port
+//               ),
+//               '[]'::json
+//             )
+//             FROM ports p
+//             LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+//             WHERE p.host_id = h.id
+//           ) as ports_json,
+//           EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois
+//         FROM hosts h
+//         INNER JOIN paginated_hosts ph ON h.id = ph.id
+//         LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+//         INNER JOIN host_groupings hg ON h.grouping_id = hg.id
+//         LEFT JOIN countries c ON h.country_id = c.id
+//         WHERE hg.name = :groupName
+//       ),
+//       total_count AS (
+//         SELECT COUNT(*) as total_count
+//         FROM hosts h
+//         INNER JOIN host_groupings hg ON h.grouping_id = hg.id
+//         WHERE hg.name = :groupName
+//       )
+//       SELECT 
+//         hd.*,
+//         tc.total_count
+//       FROM host_details hd
+//       CROSS JOIN total_count tc
+//       ORDER BY (
+//         SELECT rn FROM sorted_hosts sh WHERE sh.id = hd.id
+//       )
+//     `;
 
-//     // Получаем хосты для этой группы с пагинацией
-//     const hosts = await Host.findAll({
-//       include: [
-//         {
-//           model: Port,
-//           attributes: ["port", "type"],
-//           include: [
-//             {
-//               model: WellKnownPort,
-//               attributes: ["name"],
-//               required: false,
-//             },
-//           ],
-//         },
-//         {
-//           model: Priority,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Country,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Whois,
-//           attributes: ["value"],
-//           include: [
-//             {
-//               model: WhoisKey,
-//               attributes: ["key_name"],
-//               required: false,
-//             },
-//           ],
-//           required: false,
-//         },
-//       ],
-//       where: {
-//         grouping_id: groupData.id,
+//     const hosts = await sequelize.query(hostsQuery, {
+//       replacements: {
+//         groupName: group,
+//         offset: offset,
+//         offsetPlusLimit: offset + limitNum,
 //       },
-//       order: [
-//         ["priority_id", "DESC"],
-//         ["updated_at", "DESC"],
-//       ],
-//       limit: limitNum,
-//       offset: offset,
+//       type: sequelize.QueryTypes.SELECT,
 //     });
 
-//     const formattedHosts = hosts.map(formatHostData);
-//     const totalItems = await Host.count({
-//       where: {
-//         grouping_id: groupData.id,
-//       },
-//     });
-
-//     const totalPages = Math.ceil(totalItems / limitNum);
-
-//     return res.json({
-//       items: {
-//         items: formattedHosts,
-//         name: groupData.name,
+//     if (hosts.length === 0) {
+//       return res.status(404).json({ 
+//         message: "Группа не найдена или в ней нет хостов",
+//         items: [],
 //         pagination: {
 //           currentPage: pageNum,
+//           totalPages: 0,
+//           totalItems: 0,
+//           hasNext: false,
+//           hasPrev: false,
+//         }
+//       });
+//     }
 
-//           totalPages: totalPages,
-//           totalItems: totalItems,
-//           hasNext: pageNum < totalPages,
-//           hasPrev: pageNum > 1,
-//         },
-//       },
+//     const totalItems = parseInt(hosts[0]?.total_count || 0);
+//     const totalPages = Math.ceil(totalItems / limitNum);
+//     const items = hosts.map(formatHostFromRaw);
 
+//     return res.json({
+//       items,
 //       pagination: {
 //         currentPage: pageNum,
 //         totalPages: totalPages,
@@ -3030,9 +3368,8 @@ export const getPriorityDetails = async (req, res) => {
 //         hasNext: pageNum < totalPages,
 //         hasPrev: pageNum > 1,
 //       },
-
-//       field: "groups",
-//       type: "group",
+//       type: "search",
+//       field: "group",
 //     });
 //   } catch (error) {
 //     console.error("Ошибка в getGroupDetails:", error);
@@ -3042,82 +3379,110 @@ export const getPriorityDetails = async (req, res) => {
 
 // // Функция для получения данных по стране с пагинацией
 // export const getCountryDetails = async (req, res) => {
-//   const { country, page = 1, limit = 10 } = req.query;
-//   const pageNum = Math.max(1, parseInt(page) || 1);
-//   const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
-//   const offset = (pageNum - 1) * limitNum;
-
 //   try {
-//     // Ищем страну по имени
-//     const countryData = await Country.findOne({
-//       where: { name: country },
-//       attributes: ["id", "name"],
-//       raw: true,
+//     const { country, page = 1, limit = 10 } = req.query;
+//     const { pageNum, limitNum, offset } = paginate(req);
+
+//     const hostsQuery = `
+//       WITH sorted_hosts AS (
+//         SELECT 
+//           h.id,
+//           ROW_NUMBER() OVER (
+//             ORDER BY 
+//               CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+//               h.priority_id DESC NULLS LAST,
+//               h.updated_at DESC
+//           ) as rn
+//         FROM hosts h
+//         INNER JOIN countries c ON h.country_id = c.id
+//         WHERE c.name = :countryName
+//       ),
+//       paginated_hosts AS (
+//         SELECT id FROM sorted_hosts
+//         WHERE rn > :offset AND rn <= :offsetPlusLimit
+//         ORDER BY rn
+//       ),
+//       host_details AS (
+//         SELECT 
+//           h.id,
+//           h.ip,
+//           h.reachable,
+//           TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+//           h.priority_id,
+//           h.grouping_id,
+//           h.country_id,
+//           hp.name as priority_name,
+//           hg.name as grouping_name,
+//           c.name as country_name,
+//           (
+//             SELECT COALESCE(
+//               json_agg(
+//                 json_build_object(
+//                   'port', p.port,
+//                   'type', p.type,
+//                   'port_name', wkp.name
+//                 )
+//                 ORDER BY p.port
+//               ),
+//               '[]'::json
+//             )
+//             FROM ports p
+//             LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+//             WHERE p.host_id = h.id
+//           ) as ports_json,
+//           EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois
+//         FROM hosts h
+//         INNER JOIN paginated_hosts ph ON h.id = ph.id
+//         LEFT JOIN host_priorities hp ON h.priority_id = hp.id
+//         LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+//         INNER JOIN countries c ON h.country_id = c.id
+//         WHERE c.name = :countryName
+//       ),
+//       total_count AS (
+//         SELECT COUNT(*) as total_count
+//         FROM hosts h
+//         INNER JOIN countries c ON h.country_id = c.id
+//         WHERE c.name = :countryName
+//       )
+//       SELECT 
+//         hd.*,
+//         tc.total_count
+//       FROM host_details hd
+//       CROSS JOIN total_count tc
+//       ORDER BY (
+//         SELECT rn FROM sorted_hosts sh WHERE sh.id = hd.id
+//       )
+//     `;
+
+//     const hosts = await sequelize.query(hostsQuery, {
+//       replacements: {
+//         countryName: country,
+//         offset: offset,
+//         offsetPlusLimit: offset + limitNum,
+//       },
+//       type: sequelize.QueryTypes.SELECT,
 //     });
 
-//     if (!countryData) {
-//       return res.status(404).json({ error: "Страна не найдена" });
+//     if (hosts.length === 0) {
+//       return res.status(404).json({ 
+//         message: "Страна не найдена или в ней нет хостов",
+//         items: [],
+//         pagination: {
+//           currentPage: pageNum,
+//           totalPages: 0,
+//           totalItems: 0,
+//           hasNext: false,
+//           hasPrev: false,
+//         }
+//       });
 //     }
 
-//     // Получаем хосты для этой страны с пагинацией
-//     const hosts = await Host.findAll({
-//       include: [
-//         {
-//           model: Port,
-//           attributes: ["port", "type"],
-//           include: [
-//             {
-//               model: WellKnownPort,
-//               attributes: ["name"],
-//               required: false,
-//             },
-//           ],
-//         },
-//         {
-//           model: Priority,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Grouping,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Whois,
-//           attributes: ["value"],
-//           include: [
-//             {
-//               model: WhoisKey,
-//               attributes: ["key_name"],
-//               required: false,
-//             },
-//           ],
-//           required: false,
-//         },
-//       ],
-//       where: {
-//         country_id: countryData.id,
-//       },
-//       order: [
-//         ["priority_id", "DESC"],
-//         ["updated_at", "DESC"],
-//       ],
-//       limit: limitNum,
-//       offset: offset,
-//     });
-
-//     const formattedHosts = hosts.map(formatHostData);
-//     const totalItems = await Host.count({
-//       where: {
-//         country_id: countryData.id,
-//       },
-//     });
-
+//     const totalItems = parseInt(hosts[0]?.total_count || 0);
 //     const totalPages = Math.ceil(totalItems / limitNum);
+//     const items = hosts.map(formatHostFromRaw);
 
 //     return res.json({
-//       items: formattedHosts,
+//       items,
 //       pagination: {
 //         currentPage: pageNum,
 //         totalPages: totalPages,
@@ -3125,7 +3490,8 @@ export const getPriorityDetails = async (req, res) => {
 //         hasNext: pageNum < totalPages,
 //         hasPrev: pageNum > 1,
 //       },
-//       country: countryData.name,
+//       type: "search",
+//       field: "country",
 //     });
 //   } catch (error) {
 //     console.error("Ошибка в getCountryDetails:", error);
@@ -3135,82 +3501,110 @@ export const getPriorityDetails = async (req, res) => {
 
 // // Функция для получения данных по приоритету с пагинацией
 // export const getPriorityDetails = async (req, res) => {
-//   const { priority, page = 1, limit = 10 } = req.query;
-//   const pageNum = Math.max(1, parseInt(page) || 1);
-//   const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
-//   const offset = (pageNum - 1) * limitNum;
-
 //   try {
-//     // Ищем приоритет по имени
-//     const priorityData = await Priority.findOne({
-//       where: { name: priority },
-//       attributes: ["id", "name"],
-//       raw: true,
+//     const { priority, page = 1, limit = 10 } = req.query;
+//     const { pageNum, limitNum, offset } = paginate(req);
+
+//     const hostsQuery = `
+//       WITH sorted_hosts AS (
+//         SELECT 
+//           h.id,
+//           ROW_NUMBER() OVER (
+//             ORDER BY 
+//               CASE WHEN h.priority_id IS NULL THEN 1 ELSE 0 END,
+//               h.priority_id DESC NULLS LAST,
+//               h.updated_at DESC
+//           ) as rn
+//         FROM hosts h
+//         INNER JOIN host_priorities hp ON h.priority_id = hp.id
+//         WHERE hp.name = :priorityName
+//       ),
+//       paginated_hosts AS (
+//         SELECT id FROM sorted_hosts
+//         WHERE rn > :offset AND rn <= :offsetPlusLimit
+//         ORDER BY rn
+//       ),
+//       host_details AS (
+//         SELECT 
+//           h.id,
+//           h.ip,
+//           h.reachable,
+//           TO_CHAR(h.updated_at, 'YYYY-MM-DD HH24:MI:SS') as updated_at,
+//           h.priority_id,
+//           h.grouping_id,
+//           h.country_id,
+//           hp.name as priority_name,
+//           hg.name as grouping_name,
+//           c.name as country_name,
+//           (
+//             SELECT COALESCE(
+//               json_agg(
+//                 json_build_object(
+//                   'port', p.port,
+//                   'type', p.type,
+//                   'port_name', wkp.name
+//                 )
+//                 ORDER BY p.port
+//               ),
+//               '[]'::json
+//             )
+//             FROM ports p
+//             LEFT JOIN well_known_ports wkp ON p.port = wkp.port
+//             WHERE p.host_id = h.id
+//           ) as ports_json,
+//           EXISTS(SELECT 1 FROM whois w WHERE w.host_id = h.id) as has_whois
+//         FROM hosts h
+//         INNER JOIN paginated_hosts ph ON h.id = ph.id
+//         INNER JOIN host_priorities hp ON h.priority_id = hp.id
+//         LEFT JOIN host_groupings hg ON h.grouping_id = hg.id
+//         LEFT JOIN countries c ON h.country_id = c.id
+//         WHERE hp.name = :priorityName
+//       ),
+//       total_count AS (
+//         SELECT COUNT(*) as total_count
+//         FROM hosts h
+//         INNER JOIN host_priorities hp ON h.priority_id = hp.id
+//         WHERE hp.name = :priorityName
+//       )
+//       SELECT 
+//         hd.*,
+//         tc.total_count
+//       FROM host_details hd
+//       CROSS JOIN total_count tc
+//       ORDER BY (
+//         SELECT rn FROM sorted_hosts sh WHERE sh.id = hd.id
+//       )
+//     `;
+
+//     const hosts = await sequelize.query(hostsQuery, {
+//       replacements: {
+//         priorityName: priority,
+//         offset: offset,
+//         offsetPlusLimit: offset + limitNum,
+//       },
+//       type: sequelize.QueryTypes.SELECT,
 //     });
 
-//     if (!priorityData) {
-//       return res.status(404).json({ error: "Приоритет не найден" });
+//     if (hosts.length === 0) {
+//       return res.status(404).json({ 
+//         message: "Приоритет не найден или в нем нет хостов",
+//         items: [],
+//         pagination: {
+//           currentPage: pageNum,
+//           totalPages: 0,
+//           totalItems: 0,
+//           hasNext: false,
+//           hasPrev: false,
+//         }
+//       });
 //     }
 
-//     // Получаем хосты для этого приоритета с пагинацией
-//     const hosts = await Host.findAll({
-//       include: [
-//         {
-//           model: Port,
-//           attributes: ["port", "type"],
-//           include: [
-//             {
-//               model: WellKnownPort,
-//               attributes: ["name"],
-//               required: false,
-//             },
-//           ],
-//         },
-//         {
-//           model: Grouping,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Country,
-//           attributes: ["id", "name"],
-//           required: false,
-//         },
-//         {
-//           model: Whois,
-//           attributes: ["value"],
-//           include: [
-//             {
-//               model: WhoisKey,
-//               attributes: ["key_name"],
-//               required: false,
-//             },
-//           ],
-//           required: false,
-//         },
-//       ],
-//       where: {
-//         priority_id: priorityData.id,
-//       },
-//       order: [
-//         ["priority_id", "DESC"],
-//         ["updated_at", "DESC"],
-//       ],
-//       limit: limitNum,
-//       offset: offset,
-//     });
-
-//     const formattedHosts = hosts.map(formatHostData);
-//     const totalItems = await Host.count({
-//       where: {
-//         priority_id: priorityData.id,
-//       },
-//     });
-
+//     const totalItems = parseInt(hosts[0]?.total_count || 0);
 //     const totalPages = Math.ceil(totalItems / limitNum);
+//     const items = hosts.map(formatHostFromRaw);
 
 //     return res.json({
-//       items: formattedHosts,
+//       items,
 //       pagination: {
 //         currentPage: pageNum,
 //         totalPages: totalPages,
@@ -3218,7 +3612,8 @@ export const getPriorityDetails = async (req, res) => {
 //         hasNext: pageNum < totalPages,
 //         hasPrev: pageNum > 1,
 //       },
-//       priority: priorityData.name,
+//       type: "search",
+//       field: "priority",
 //     });
 //   } catch (error) {
 //     console.error("Ошибка в getPriorityDetails:", error);
