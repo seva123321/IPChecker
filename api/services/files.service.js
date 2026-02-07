@@ -403,6 +403,7 @@ export default class FileService {
 
       let portScanResult = { open: [], filtered: [] };
       let whoisData = {};
+      let dataOsService = {};
 
       // 2. Получение данных только для доступных хостов
       if (reachable) {
@@ -415,8 +416,17 @@ export default class FileService {
 
           portScanResult =
             portResult.status === "fulfilled"
-              ? portResult.value
+              ? {
+                  open: portResult.value.open,
+                  filtered: portResult.value.filtered,
+                } //portResult.value
               : { open: [], filtered: [] };
+          dataOsService =
+            portResult.status === "fulfilled" &&
+            portResult.value.os &&
+            portResult.value.services
+              ? { os: portResult.value.os, services: portResult.value.services }
+              : {};
           whoisData =
             whoisResult.status === "fulfilled" ? whoisResult.value : {};
 
@@ -441,6 +451,7 @@ export default class FileService {
         ip: ip,
         reachable: reachable,
         port_data: portScanResult,
+        other_data: dataOsService,
         whois: whoisData,
       };
 
@@ -467,367 +478,384 @@ export default class FileService {
     }
   }
 
-  // static async processStandardBatch(
-  //   uniqueIPs,
-  //   config,
-  //   fileName = null,
-  //   progressCallback = () => {}
-  // ) {
-  //   console.log(
-  //     `🔧 Стандартная обработка для ${uniqueIPs.length} IP, файл: ${fileName}`
-  //   );
-
-  //   const limit = pLimit(config.ipConcurrency);
-  //   const chunkSize = config.batchSize;
-  //   const chunks = [];
-
-  //   for (let i = 0; i < uniqueIPs.length; i += chunkSize) {
-  //     chunks.push(uniqueIPs.slice(i, i + chunkSize));
-  //   }
-
-  //   let allResults = [];
-  //   let successfulCount = 0;
-  //   let failedCount = 0;
-
-  //   for (let i = 0; i < chunks.length; i++) {
-  //     const chunk = chunks[i];
-  //     console.log(
-  //       `Обрабатываем часть ${i + 1}/${chunks.length} (${
-  //         chunk.length
-  //       } IP), файл: ${fileName}`
-  //     );
-
-  //     // Отправляем событие начала батча
-  //     progressCallback({
-  //       type: "batch_start",
-  //       batchIndex: i + 1,
-  //       totalBatches: chunks.length,
-  //       batchSize: chunk.length,
-  //       fileName: fileName,
-  //     });
-
-  //     const chunkResults = await Promise.allSettled(
-  //       chunk.map((ip) => {
-  //         if (isLocalIp(ip)) {
-  //           return Promise.resolve({ ip, error: "Local IP address skipped" });
-  //         }
-
-  //         return limit(async () => {
-  //           try {
-  //             const reachable = await checkReachability(
-  //               ip,
-  //               config.reachabilityTimeout
-  //             );
-
-  //             let portScanResult = { open: [], filtered: [] };
-  //             try {
-  //               portScanResult = await Promise.race([
-  //                 scanPortsSimple(ip),
-  //                 new Promise((_, reject) =>
-  //                   setTimeout(
-  //                     () => reject(new Error("Timeout")),
-  //                     config.portScanTimeout
-  //                   )
-  //                 ),
-  //               ]);
-  //             } catch (timeoutError) {
-  //               console.warn(
-  //                 `Таймаут сканирования портов для ${ip}:`,
-  //                 timeoutError.message
-  //               );
-  //             }
-
-  //             const whoisData = await FileService.getCachedWhois(ip).catch(
-  //               () => ({})
-  //             );
-
-  //             const dbData = {
-  //               ip: ip,
-  //               reachable: reachable,
-  //               port_data: portScanResult,
-  //               whois: whoisData,
-  //             };
-
-  //             // Передаем fileName в addedJSONoneObj
-  //             await FileService.addedJSONoneObj(dbData, null, fileName);
-  //             return { ip, success: true };
-  //           } catch (scanError) {
-  //             console.error(`Ошибка при обработке IP ${ip}:`, scanError);
-  //             return { ip, error: scanError.message };
-  //           }
-  //         });
-  //       })
-  //     );
-
-  //     allResults = allResults.concat(chunkResults);
-
-  //     // Обновляем счетчики
-  //     const chunkSuccessful = chunkResults.filter(
-  //       (result) => result.status === "fulfilled" && !result.value.error
-  //     ).length;
-  //     const chunkFailed = chunkResults.length - chunkSuccessful;
-
-  //     successfulCount += chunkSuccessful;
-  //     failedCount += chunkFailed;
-
-  //     // Отправляем прогресс после каждого батча
-  //     const processedIPs = successfulCount + failedCount;
-  //     const progress = Math.round((processedIPs / uniqueIPs.length) * 100);
-
-  //     progressCallback({
-  //       type: "batch_complete",
-  //       batchIndex: i + 1,
-  //       totalBatches: chunks.length,
-  //       processedIPs: processedIPs,
-  //       totalIPs: uniqueIPs.length,
-  //       progress: progress,
-  //       successful: successfulCount,
-  //       failed: failedCount,
-  //       fileName: fileName,
-  //     });
-
-  //     console.log(
-  //       `📊 Прогресс: ${processedIPs}/${uniqueIPs.length} IP (${progress}%), файл: ${fileName}`
-  //     );
-
-  //     // Пауза между чанками
-  //     if (i < chunks.length - 1) {
-  //       await new Promise((resolve) => setTimeout(resolve, 1000));
-  //     }
-  //   }
-
-  //   console.log(
-  //     `Обработка завершена. Всего: ${uniqueIPs.length}, Успешно: ${successfulCount}, Неудачно: ${failedCount}, файл: ${fileName}`
-  //   );
-
-  //   return {
-  //     message: `Обработка завершена. Всего: ${uniqueIPs.length}, Успешно: ${successfulCount}, Неудачно: ${failedCount}`,
-  //     total: uniqueIPs.length,
-  //     successful: successfulCount,
-  //     failed: failedCount,
-  //     details: {
-  //       successful_ips: allResults
-  //         .filter((r) => r.status === "fulfilled" && !r.value.error)
-  //         .map((r) => r.value.ip),
-  //       failed_ips: allResults
-  //         .filter((r) => r.status === "rejected" || r.value.error)
-  //         .map((r) => ({
-  //           ip: r.status === "fulfilled" ? r.value.ip : "unknown",
-  //           error: r.status === "rejected" ? r.reason?.message : r.value.error,
-  //         })),
-  //     },
-  //   };
-  // }
-
   static async processStandardBatch(
-  uniqueIPs,
-  config,
-  fileName = null,
-  progressCallback = () => {}
-) {
-  console.log(
-    `🔧 Стандартная обработка для ${uniqueIPs.length} IP, файл: ${fileName}`
-  );
-
-  const limit = pLimit(config.ipConcurrency);
-  const chunkSize = config.batchSize;
-  const totalChunks = Math.ceil(uniqueIPs.length / chunkSize);
-  
-  // Предварительное кэширование WHOIS для всех IP
-  const whoisCache = new Map();
-  
-  // Предзагрузка WHOIS данных асинхронно
-  const preloadWhois = async (ip) => {
-    if (isLocalIp(ip)) return null;
-    try {
-      const data = await FileService.getCachedWhois(ip);
-      whoisCache.set(ip, data);
-      return data;
-    } catch {
-      whoisCache.set(ip, {});
-      return {};
-    }
-  };
-
-  // Параллельная предзагрузка WHOIS для первой порции IP
-  const initialPreload = uniqueIPs
-    .slice(0, Math.min(uniqueIPs.length, config.ipConcurrency * 2))
-    .map(ip => limit(() => preloadWhois(ip)));
-
-  await Promise.allSettled(initialPreload);
-
-  let allResults = [];
-  let successfulCount = 0;
-  let failedCount = 0;
-  
-  // Обработка с использованием for...of для асинхронных итераций
-  for (let i = 0; i < uniqueIPs.length; i += chunkSize) {
-    const chunk = uniqueIPs.slice(i, i + chunkSize);
-    const chunkIndex = Math.floor(i / chunkSize) + 1;
-    
+    uniqueIPs,
+    config,
+    fileName = null,
+    progressCallback = () => {}
+  ) {
     console.log(
-      `Обрабатываем часть ${chunkIndex}/${totalChunks} (${chunk.length} IP), файл: ${fileName}`
+      `🔧 Стандартная обработка для ${uniqueIPs.length} IP, файл: ${fileName}`
     );
 
-    // Асинхронная предзагрузка WHOIS для следующей порции
-    if (i + chunkSize < uniqueIPs.length) {
-      const nextChunk = uniqueIPs.slice(i + chunkSize, i + 2 * chunkSize);
-      nextChunk.forEach(ip => {
-        if (!whoisCache.has(ip) && !isLocalIp(ip)) {
-          limit(() => preloadWhois(ip)).catch(() => {});
-        }
-      });
+    const limit = pLimit(config.ipConcurrency);
+    const chunkSize = config.batchSize;
+    const chunks = [];
+
+    for (let i = 0; i < uniqueIPs.length; i += chunkSize) {
+      chunks.push(uniqueIPs.slice(i, i + chunkSize));
     }
 
-    progressCallback({
-      type: "batch_start",
-      batchIndex: chunkIndex,
-      totalBatches: totalChunks,
-      batchSize: chunk.length,
-      fileName: fileName,
-    });
+    let allResults = [];
+    let successfulCount = 0;
+    let failedCount = 0;
 
-    // Оптимизированная обработка чанка
-    const chunkPromises = chunk.map((ip) => {
-      if (isLocalIp(ip)) {
-        return Promise.resolve({ ip, error: "Local IP address skipped", skipped: true });
-      }
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      console.log(
+        `Обрабатываем часть ${i + 1}/${chunks.length} (${
+          chunk.length
+        } IP), файл: ${fileName}`
+      );
 
-      return limit(async () => {
-        try {
-          // Параллельная проверка доступности и сканирование портов
-          const [reachable, portScanResult] = await Promise.all([
-            checkReachability(ip, config.reachabilityTimeout),
-            Promise.race([
-              scanPortsSimple(ip),
-              new Promise((_, reject) =>
-                setTimeout(() => reject(new Error("Port scan timeout")), config.portScanTimeout)
-              ),
-            ]).catch((timeoutError) => {
-              console.warn(`Таймаут сканирования портов для ${ip}:`, timeoutError.message);
-              return { open: [], filtered: [] };
-            })
-          ]);
+      // Отправляем событие начала батча
+      progressCallback({
+        type: "batch_start",
+        batchIndex: i + 1,
+        totalBatches: chunks.length,
+        batchSize: chunk.length,
+        fileName: fileName,
+      });
 
-          // Получаем WHOIS из кэша или загружаем
-          let whoisData;
-          if (whoisCache.has(ip)) {
-            whoisData = whoisCache.get(ip);
-          } else {
-            whoisData = await preloadWhois(ip);
+      const chunkResults = await Promise.allSettled(
+        chunk.map((ip) => {
+          if (isLocalIp(ip)) {
+            return Promise.resolve({ ip, error: "Local IP address skipped" });
           }
 
-          const dbData = {
-            ip: ip,
-            reachable: reachable,
-            port_data: portScanResult || { open: [], filtered: [] },
-            whois: whoisData || {},
-          };
+          return limit(async () => {
+            try {
+              const reachable = await checkReachability(
+                ip,
+                config.reachabilityTimeout
+              );
 
-          // Параллельная запись в базу данных
-          await Promise.race([
-            FileService.addedJSONoneObj(dbData, null, fileName),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error("Database write timeout")), 10000)
-            )
-          ]).catch((dbError) => {
-            console.error(`Ошибка записи для IP ${ip}:`, dbError.message);
+              let portScanResult = { open: [], filtered: [] };
+              try {
+                portScanResult = await Promise.race([
+                  scanPortsSimple(ip),
+                  new Promise((_, reject) =>
+                    setTimeout(
+                      () => reject(new Error("Timeout")),
+                      config.portScanTimeout
+                    )
+                  ),
+                ]);
+              } catch (timeoutError) {
+                console.warn(
+                  `Таймаут сканирования портов для ${ip}:`,
+                  timeoutError.message
+                );
+              }
+
+              const whoisData = await FileService.getCachedWhois(ip).catch(
+                () => ({})
+              );
+
+              const dbData = {
+                ip: ip,
+                reachable: reachable,
+                port_data: portScanResult,
+                whois: whoisData,
+              };
+
+              // Передаем fileName в addedJSONoneObj
+              await FileService.addedJSONoneObj(dbData, null, fileName);
+              return { ip, success: true };
+            } catch (scanError) {
+              console.error(`Ошибка при обработке IP ${ip}:`, scanError);
+              return { ip, error: scanError.message };
+            }
           });
+        })
+      );
 
-          return { ip, success: true };
-        } catch (scanError) {
-          console.error(`Ошибка при обработке IP ${ip}:`, scanError);
-          return { ip, error: scanError.message };
-        }
+      allResults = allResults.concat(chunkResults);
+
+      // Обновляем счетчики
+      const chunkSuccessful = chunkResults.filter(
+        (result) => result.status === "fulfilled" && !result.value.error
+      ).length;
+      const chunkFailed = chunkResults.length - chunkSuccessful;
+
+      successfulCount += chunkSuccessful;
+      failedCount += chunkFailed;
+
+      // Отправляем прогресс после каждого батча
+      const processedIPs = successfulCount + failedCount;
+      const progress = Math.round((processedIPs / uniqueIPs.length) * 100);
+
+      progressCallback({
+        type: "batch_complete",
+        batchIndex: i + 1,
+        totalBatches: chunks.length,
+        processedIPs: processedIPs,
+        totalIPs: uniqueIPs.length,
+        progress: progress,
+        successful: successfulCount,
+        failed: failedCount,
+        fileName: fileName,
       });
-    });
 
-    const chunkResults = await Promise.allSettled(chunkPromises);
-    allResults = allResults.concat(chunkResults);
+      console.log(
+        `📊 Прогресс: ${processedIPs}/${uniqueIPs.length} IP (${progress}%), файл: ${fileName}`
+      );
 
-    // Оптимизированный подсчет результатов
-    const chunkStats = chunkResults.reduce((acc, result) => {
-      if (result.status === 'fulfilled') {
-        if (result.value.skipped) {
-          acc.skipped++;
-        } else if (result.value.error) {
-          acc.failed++;
-        } else {
-          acc.successful++;
-        }
-      } else {
-        acc.failed++;
+      // Пауза между чанками
+      if (i < chunks.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
-      return acc;
-    }, { successful: 0, failed: 0, skipped: 0 });
-
-    successfulCount += chunkStats.successful;
-    failedCount += chunkStats.failed;
-
-    const processedIPs = successfulCount + failedCount;
-    const progress = Math.round((processedIPs / uniqueIPs.length) * 100);
-
-    progressCallback({
-      type: "batch_complete",
-      batchIndex: chunkIndex,
-      totalBatches: totalChunks,
-      processedIPs: processedIPs,
-      totalIPs: uniqueIPs.length,
-      progress: progress,
-      successful: successfulCount,
-      failed: failedCount,
-      fileName: fileName,
-    });
+    }
 
     console.log(
-      `📊 Прогресс: ${processedIPs}/${uniqueIPs.length} IP (${progress}%), файл: ${fileName}`
+      `Обработка завершена. Всего: ${uniqueIPs.length}, Успешно: ${successfulCount}, Неудачно: ${failedCount}, файл: ${fileName}`
     );
 
-    // Динамическая пауза между чанками (меньше при успешной обработке)
-    if (chunkIndex < totalChunks) {
-      const pauseTime = chunkStats.failed > chunkStats.successful * 0.1 ? 2000 : 500;
-      await new Promise(resolve => setTimeout(resolve, pauseTime));
-    }
+    return {
+      message: `Обработка завершена. Всего: ${uniqueIPs.length}, Успешно: ${successfulCount}, Неудачно: ${failedCount}`,
+      total: uniqueIPs.length,
+      successful: successfulCount,
+      failed: failedCount,
+      details: {
+        successful_ips: allResults
+          .filter((r) => r.status === "fulfilled" && !r.value.error)
+          .map((r) => r.value.ip),
+        failed_ips: allResults
+          .filter((r) => r.status === "rejected" || r.value.error)
+          .map((r) => ({
+            ip: r.status === "fulfilled" ? r.value.ip : "unknown",
+            error: r.status === "rejected" ? r.reason?.message : r.value.error,
+          })),
+      },
+    };
   }
 
-  console.log(
-    `Обработка завершена. Всего: ${uniqueIPs.length}, Успешно: ${successfulCount}, Неудачно: ${failedCount}, файл: ${fileName}`
-  );
+  static async processStandardBatch(
+    uniqueIPs,
+    config,
+    fileName = null,
+    progressCallback = () => {}
+  ) {
+    console.log(
+      `🔧 Стандартная обработка для ${uniqueIPs.length} IP, файл: ${fileName}`
+    );
 
-  // Оптимизированное формирование результатов
-  const successfulIPs = [];
-  const failedIPs = [];
+    const limit = pLimit(config.ipConcurrency);
+    const chunkSize = config.batchSize;
+    const totalChunks = Math.ceil(uniqueIPs.length / chunkSize);
 
-  for (const result of allResults) {
-    if (result.status === 'fulfilled') {
-      if (result.value.error) {
-        failedIPs.push({
-          ip: result.value.ip,
-          error: result.value.error
-        });
-      } else if (!result.value.skipped) {
-        successfulIPs.push(result.value.ip);
+    // Предварительное кэширование WHOIS для всех IP
+    const whoisCache = new Map();
+
+    // Предзагрузка WHOIS данных асинхронно
+    const preloadWhois = async (ip) => {
+      if (isLocalIp(ip)) return null;
+      try {
+        const data = await FileService.getCachedWhois(ip);
+        whoisCache.set(ip, data);
+        return data;
+      } catch {
+        whoisCache.set(ip, {});
+        return {};
       }
-    } else {
-      failedIPs.push({
-        ip: 'unknown',
-        error: result.reason?.message || 'Unknown error'
-      });
-    }
-  }
+    };
 
-  return {
-    message: `Обработка завершена. Всего: ${uniqueIPs.length}, Успешно: ${successfulCount}, Неудачно: ${failedCount}`,
-    total: uniqueIPs.length,
-    successful: successfulCount,
-    failed: failedIPs.length,
-    // failed: failedCount,
-    details: {
-      successful_ips: successfulIPs,
-      failed_ips: failedIPs,
-    },
-  };
-}
+    // Параллельная предзагрузка WHOIS для первой порции IP
+    const initialPreload = uniqueIPs
+      .slice(0, Math.min(uniqueIPs.length, config.ipConcurrency * 2))
+      .map((ip) => limit(() => preloadWhois(ip)));
+
+    await Promise.allSettled(initialPreload);
+
+    let allResults = [];
+    let successfulCount = 0;
+    let failedCount = 0;
+
+    // Обработка с использованием for...of для асинхронных итераций
+    for (let i = 0; i < uniqueIPs.length; i += chunkSize) {
+      const chunk = uniqueIPs.slice(i, i + chunkSize);
+      const chunkIndex = Math.floor(i / chunkSize) + 1;
+
+      console.log(
+        `Обрабатываем часть ${chunkIndex}/${totalChunks} (${chunk.length} IP), файл: ${fileName}`
+      );
+
+      // Асинхронная предзагрузка WHOIS для следующей порции
+      if (i + chunkSize < uniqueIPs.length) {
+        const nextChunk = uniqueIPs.slice(i + chunkSize, i + 2 * chunkSize);
+        nextChunk.forEach((ip) => {
+          if (!whoisCache.has(ip) && !isLocalIp(ip)) {
+            limit(() => preloadWhois(ip)).catch(() => {});
+          }
+        });
+      }
+
+      progressCallback({
+        type: "batch_start",
+        batchIndex: chunkIndex,
+        totalBatches: totalChunks,
+        batchSize: chunk.length,
+        fileName: fileName,
+      });
+
+      // Оптимизированная обработка чанка
+      const chunkPromises = chunk.map((ip) => {
+        if (isLocalIp(ip)) {
+          return Promise.resolve({
+            ip,
+            error: "Local IP address skipped",
+            skipped: true,
+          });
+        }
+
+        return limit(async () => {
+          try {
+            // Параллельная проверка доступности и сканирование портов
+            const [reachable, portScanResult] = await Promise.all([
+              checkReachability(ip, config.reachabilityTimeout),
+              Promise.race([
+                scanPortsSimple(ip),
+                new Promise((_, reject) =>
+                  setTimeout(
+                    () => reject(new Error("Port scan timeout")),
+                    config.portScanTimeout
+                  )
+                ),
+              ]).catch((timeoutError) => {
+                console.warn(
+                  `Таймаут сканирования портов для ${ip}:`,
+                  timeoutError.message
+                );
+                return { open: [], filtered: [] };
+              }),
+            ]);
+
+            // Получаем WHOIS из кэша или загружаем
+            let whoisData;
+            if (whoisCache.has(ip)) {
+              whoisData = whoisCache.get(ip);
+            } else {
+              whoisData = await preloadWhois(ip);
+            }
+
+            const dbData = {
+              ip: ip,
+              reachable: reachable,
+              port_data: portScanResult || { open: [], filtered: [] },
+              whois: whoisData || {},
+            };
+
+            // Параллельная запись в базу данных
+            await Promise.race([
+              FileService.addedJSONoneObj(dbData, null, fileName),
+              new Promise((_, reject) =>
+                setTimeout(
+                  () => reject(new Error("Database write timeout")),
+                  10000
+                )
+              ),
+            ]).catch((dbError) => {
+              console.error(`Ошибка записи для IP ${ip}:`, dbError.message);
+            });
+
+            return { ip, success: true };
+          } catch (scanError) {
+            console.error(`Ошибка при обработке IP ${ip}:`, scanError);
+            return { ip, error: scanError.message };
+          }
+        });
+      });
+
+      const chunkResults = await Promise.allSettled(chunkPromises);
+      allResults = allResults.concat(chunkResults);
+
+      // Оптимизированный подсчет результатов
+      const chunkStats = chunkResults.reduce(
+        (acc, result) => {
+          if (result.status === "fulfilled") {
+            if (result.value.skipped) {
+              acc.skipped++;
+            } else if (result.value.error) {
+              acc.failed++;
+            } else {
+              acc.successful++;
+            }
+          } else {
+            acc.failed++;
+          }
+          return acc;
+        },
+        { successful: 0, failed: 0, skipped: 0 }
+      );
+
+      successfulCount += chunkStats.successful;
+      failedCount += chunkStats.failed;
+
+      const processedIPs = successfulCount + failedCount;
+      const progress = Math.round((processedIPs / uniqueIPs.length) * 100);
+
+      progressCallback({
+        type: "batch_complete",
+        batchIndex: chunkIndex,
+        totalBatches: totalChunks,
+        processedIPs: processedIPs,
+        totalIPs: uniqueIPs.length,
+        progress: progress,
+        successful: successfulCount,
+        failed: failedCount,
+        fileName: fileName,
+      });
+
+      console.log(
+        `📊 Прогресс: ${processedIPs}/${uniqueIPs.length} IP (${progress}%), файл: ${fileName}`
+      );
+
+      // Динамическая пауза между чанками (меньше при успешной обработке)
+      if (chunkIndex < totalChunks) {
+        const pauseTime =
+          chunkStats.failed > chunkStats.successful * 0.1 ? 2000 : 500;
+        await new Promise((resolve) => setTimeout(resolve, pauseTime));
+      }
+    }
+
+    console.log(
+      `Обработка завершена. Всего: ${uniqueIPs.length}, Успешно: ${successfulCount}, Неудачно: ${failedCount}, файл: ${fileName}`
+    );
+
+    // Оптимизированное формирование результатов
+    const successfulIPs = [];
+    const failedIPs = [];
+
+    for (const result of allResults) {
+      if (result.status === "fulfilled") {
+        if (result.value.error) {
+          failedIPs.push({
+            ip: result.value.ip,
+            error: result.value.error,
+          });
+        } else if (!result.value.skipped) {
+          successfulIPs.push(result.value.ip);
+        }
+      } else {
+        failedIPs.push({
+          ip: "unknown",
+          error: result.reason?.message || "Unknown error",
+        });
+      }
+    }
+
+    return {
+      message: `Обработка завершена. Всего: ${uniqueIPs.length}, Успешно: ${successfulCount}, Неудачно: ${failedCount}`,
+      total: uniqueIPs.length,
+      successful: successfulCount,
+      failed: failedIPs.length,
+      // failed: failedCount,
+      details: {
+        successful_ips: successfulIPs,
+        failed_ips: failedIPs,
+      },
+    };
+  }
 
   static async saveProcessedFile(fileName, result, clientId) {
     try {
@@ -1492,365 +1520,396 @@ export default class FileService {
       throw error; // Пробрасываем ошибку для отката транзакции
     }
   }
-// files.service.js - добавьте эти методы
+  // files.service.js - добавьте эти методы
 
-// Метод для сканирования и обновления одного IP
-static async scanAndUpdateSingleIP(ip, config) {
-  try {
-    console.log(`🔍 Сканирование и обновление одного IP: ${ip}`)
-    
-    // 1. Сначала получаем текущие данные хоста из базы
-    const existingHost = await Host.findOne({
-      where: { ip: ip },
-      include: [
-        {
-          model: Priority,
-          attributes: ["id", "name"]
-        },
-        {
-          model: Grouping,
-          attributes: ["id", "name"]
-        },
-        {
-          model: Country,
-          attributes: ["id", "name"]
+  // Метод для сканирования и обновления одного IP
+  static async scanAndUpdateSingleIP(ip, config) {
+    try {
+      console.log(`🔍 Сканирование и обновление одного IP: ${ip}`);
+
+      // 1. Сначала получаем текущие данные хоста из базы
+      const existingHost = await Host.findOne({
+        where: { ip: ip },
+        include: [
+          {
+            model: Priority,
+            attributes: ["id", "name"],
+          },
+          {
+            model: Grouping,
+            attributes: ["id", "name"],
+          },
+          {
+            model: Country,
+            attributes: ["id", "name"],
+          },
+        ],
+      });
+
+      // Сохраняем существующие значения
+      const existingPriority = existingHost?.Priority;
+      const existingGrouping = existingHost?.Grouping;
+      const existingCountry = existingHost?.Country;
+
+      // 2. Проверяем, что IP не локальный
+      if (isLocalIp(ip)) {
+        return {
+          success: false,
+          error: "Локальный IP адрес",
+          existingData: existingHost
+            ? {
+                priority: existingPriority,
+                grouping: existingGrouping,
+                country: existingCountry,
+              }
+            : null,
+        };
+      }
+
+      // 3. Проверяем доступность
+      const reachable = await checkReachability(ip, config.reachabilityTimeout);
+      console.log(`📡 IP ${ip} доступен: ${reachable}`);
+
+      let portScanResult = { open: [], filtered: [] };
+      let whoisData = {};
+
+      // 4. Получаем данные только для доступных хостов
+      if (reachable) {
+        try {
+          // Параллельно сканируем порты и получаем WHOIS
+          const [portResult, whoisResult] = await Promise.allSettled([
+            scanPortsSimple(ip).catch(() => ({ open: [], filtered: [] })),
+            this.getCachedWhois(ip).catch(() => ({})),
+          ]);
+
+          portScanResult =
+            portResult.status === "fulfilled"
+              ? portResult.value
+              : { open: [], filtered: [] };
+
+          whoisData =
+            whoisResult.status === "fulfilled" ? whoisResult.value : {};
+
+          console.log(
+            `🔌 ${ip}: найдено ${portScanResult.open.length} открытых и ${portScanResult.filtered.length} фильтрованных портов`
+          );
+          console.log(
+            `📝 ${ip}: получено ${Object.keys(whoisData).length} WHOIS записей`
+          );
+        } catch (scanError) {
+          console.error(`❌ Ошибка сканирования ${ip}:`, scanError);
         }
-      ]
-    })
-    
-    // Сохраняем существующие значения
-    const existingPriority = existingHost?.Priority
-    const existingGrouping = existingHost?.Grouping
-    const existingCountry = existingHost?.Country
-    
-    // 2. Проверяем, что IP не локальный
-    if (isLocalIp(ip)) {
-      return { 
-        success: false, 
-        error: "Локальный IP адрес",
-        existingData: existingHost ? {
+      }
+
+      // 5. Подготавливаем данные для сохранения, включая существующие значения
+      const dbData = {
+        ip: ip,
+        reachable: reachable,
+        port_data: portScanResult,
+        whois: whoisData,
+        // Добавляем существующие данные из базы
+        existing_priority: existingPriority,
+        existing_grouping: existingGrouping,
+        existing_country: existingCountry,
+      };
+
+      // 6. Сохраняем данные в базу с передачей существующих значений
+      const result = await this.updateSingleIP(dbData, existingHost?.id);
+
+      return {
+        success: true,
+        ip: ip,
+        reachable: reachable,
+        ports: portScanResult,
+        whoisCount: Object.keys(whoisData).length,
+        existingData: {
           priority: existingPriority,
           grouping: existingGrouping,
-          country: existingCountry
-        } : null
-      }
-    }
-    
-    // 3. Проверяем доступность
-    const reachable = await checkReachability(ip, config.reachabilityTimeout)
-    console.log(`📡 IP ${ip} доступен: ${reachable}`)
-    
-    let portScanResult = { open: [], filtered: [] }
-    let whoisData = {}
-    
-    // 4. Получаем данные только для доступных хостов
-    if (reachable) {
-      try {
-        // Параллельно сканируем порты и получаем WHOIS
-        const [portResult, whoisResult] = await Promise.allSettled([
-          scanPortsSimple(ip).catch(() => ({ open: [], filtered: [] })),
-          this.getCachedWhois(ip).catch(() => ({}))
-        ])
-        
-        portScanResult = portResult.status === "fulfilled" 
-          ? portResult.value 
-          : { open: [], filtered: [] }
-        
-        whoisData = whoisResult.status === "fulfilled" 
-          ? whoisResult.value 
-          : {}
-        
-        console.log(`🔌 ${ip}: найдено ${portScanResult.open.length} открытых и ${portScanResult.filtered.length} фильтрованных портов`)
-        console.log(`📝 ${ip}: получено ${Object.keys(whoisData).length} WHOIS записей`)
-      } catch (scanError) {
-        console.error(`❌ Ошибка сканирования ${ip}:`, scanError)
-      }
-    }
-    
-    // 5. Подготавливаем данные для сохранения, включая существующие значения
-    const dbData = {
-      ip: ip,
-      reachable: reachable,
-      port_data: portScanResult,
-      whois: whoisData,
-      // Добавляем существующие данные из базы
-      existing_priority: existingPriority,
-      existing_grouping: existingGrouping,
-      existing_country: existingCountry
-    }
-    
-    // 6. Сохраняем данные в базу с передачей существующих значений
-    const result = await this.updateSingleIP(dbData, existingHost?.id)
-    
-    return {
-      success: true,
-      ip: ip,
-      reachable: reachable,
-      ports: portScanResult,
-      whoisCount: Object.keys(whoisData).length,
-      existingData: {
-        priority: existingPriority,
-        grouping: existingGrouping,
-        country: existingCountry
-      },
-      message: `IP ${ip} успешно обновлен`
-    }
-    
-  } catch (error) {
-    console.error(`❌ Ошибка при обновлении IP ${ip}:`, error)
-    return {
-      success: false,
-      error: error.message,
-      ip: ip
-    }
-  }
-}
-
-static async updateSingleIP(dbData, hostId = null) {
-  const transaction = await sequelize.transaction();
-  
-  try {
-    console.log(`🔄 Обновление одного IP: ${dbData.ip}`)
-    
-    const { 
-      ip, 
-      reachable, 
-      port_data, 
-      whois,
-      existing_priority,
-      existing_grouping,
-      existing_country
-    } = dbData
-    
-    // 1. Находим или создаем хост
-    let host;
-    if (hostId) {
-      host = await Host.findByPk(hostId, { transaction });
-    }
-    
-    if (!host) {
-      host = await Host.findOne({
-        where: { ip: ip },
-        transaction
-      });
-    }
-    
-    if (!host) {
-      // Создаем новый хост
-      host = await Host.create({
-        ip: ip,
-        reachable: Boolean(reachable),
-        updated_at: new Date(),
-        // Используем существующие значения или значения по умолчанию
-        priority_id: existing_priority?.id || null,
-        grouping_id: existing_grouping?.id || null,
-        country_id: existing_country?.id || null
-      }, { transaction });
-      console.log(`✅ Создан новый хост: ${ip}`);
-    } else {
-      // Обновляем существующий хост, сохраняем существующие значения
-      const updateData = {
-        reachable: Boolean(reachable),
-        updated_at: new Date()
+          country: existingCountry,
+        },
+        message: `IP ${ip} успешно обновлен`,
       };
-      
-      // Только если не null/undefined, сохраняем существующие значения
-      if (existing_priority !== undefined && existing_priority !== null) {
-        updateData.priority_id = existing_priority.id;
-      }
-      if (existing_grouping !== undefined && existing_grouping !== null) {
-        updateData.grouping_id = existing_grouping.id;
-      }
-      if (existing_country !== undefined && existing_country !== null) {
-        updateData.country_id = existing_country.id;
-      }
-      
-      await host.update(updateData, { transaction });
-      console.log(`🔄 Обновлен существующий хост: ${ip}`);
+    } catch (error) {
+      console.error(`❌ Ошибка при обновлении IP ${ip}:`, error);
+      return {
+        success: false,
+        error: error.message,
+        ip: ip,
+      };
     }
-    
-    // 2. Обработка портов
-    console.log(`   🔌 Обработка портов для ${ip}...`);
-    
-    // Удаляем старые порты
-    await Port.destroy({
-      where: { host_id: host.id },
-      transaction
-    });
-    
-    // Создаем новые порты
-    const portPromises = [];
-    
-    // Для открытых портов
-    const openPorts = Array.isArray(port_data?.open) ? port_data.open : [];
-    for (const port of openPorts) {
-      const portNumber = typeof port === "object" && port.port ? port.port : port;
-      portPromises.push(
-        Port.create({
-          host_id: host.id,
-          port: portNumber,
-          type: "open"
-        }, { transaction })
-      );
-    }
-    
-    // Для filtered портов
-    const filteredPorts = Array.isArray(port_data?.filtered) ? port_data.filtered : [];
-    for (const port of filteredPorts) {
-      const portNumber = typeof port === "object" && port.port ? port.port : port;
-      portPromises.push(
-        Port.create({
-          host_id: host.id,
-          port: portNumber,
-          type: "filtered"
-        }, { transaction })
-      );
-    }
-    
-    if (portPromises.length > 0) {
-      await Promise.all(portPromises);
-      console.log(`   ✅ Порты созданы: ${portPromises.length} записей`);
-    }
-    
-    // 3. Обработка WHOIS данных
-    console.log(`   📝 Обработка WHOIS данных для ${ip}...`);
-    
-    // Удаляем старые WHOIS записи
-    await Whois.destroy({
-      where: { host_id: host.id },
-      transaction
-    });
-    
-    // Получаем разрешенные ключи WHOIS
-    const allowedKeys = await WhoisKey.findAll({
-      attributes: ["key_name"],
-      transaction
-    });
-    
-    const allowedKeyNames = new Set(allowedKeys.map(k => k.key_name));
-    
-    // Создаем новые WHOIS записи
-    const whoisPromises = Object.entries(whois || {})
-      .filter(([key]) => allowedKeyNames.has(key))
-      .filter(([key, value]) => value !== null && value !== undefined && value !== "")
-      .map(async ([key, value]) => {
-        const [whoisKey] = await WhoisKey.findOrCreate({
-          where: { key_name: key },
-          defaults: { key_name: key },
-          transaction
-        });
-        
-        return Whois.create({
-          host_id: host.id,
-          key_id: whoisKey.id,
-          value: String(value)
-        }, { transaction });
-      });
-    
-    if (whoisPromises.length > 0) {
-      await Promise.all(whoisPromises);
-      console.log(`   ✅ WHOIS данные созданы: ${whoisPromises.length} записей`);
-    }
-    
-    // 4. Коммит транзакции
-    await transaction.commit();
-    console.log(`   ✅ Транзакция закоммичена для IP ${ip}`);
-    
-    return {
-      success: true,
-      hostId: host.id,
-      ip: ip,
-      priority_id: host.priority_id,
-      grouping_id: host.grouping_id,
-      country_id: host.country_id
-    };
-    
-  } catch (error) {
-    console.error(`❌ Ошибка при обновлении IP ${dbData.ip}:`, error);
-    
-    if (transaction) {
-      try {
-        await transaction.rollback();
-        console.log(`↩️ Транзакция откатана для IP ${dbData.ip}`);
-      } catch (rollbackError) {
-        console.error(`❌ Ошибка при откате транзакции:`, rollbackError);
-      }
-    }
-    
-    throw error;
   }
-}
 
-// Метод для форматирования данных одного хоста
-static formatSingleHostData(host) {
-  if (!host) return null
-  
-  // Формируем данные портов
-  const portData = {
-    open: [],
-    filtered: [],
-    all: []
-  }
-  
-  if (host.Ports && host.Ports.length > 0) {
-    host.Ports.forEach((port) => {
-      const portInfo = {
-        port: port.port,
-        service: port.WellKnownPort ? port.WellKnownPort.name : null,
-        protocol: "tcp"
+  static async updateSingleIP(dbData, hostId = null) {
+    const transaction = await sequelize.transaction();
+
+    try {
+      console.log(`🔄 Обновление одного IP: ${dbData.ip}`);
+
+      const {
+        ip,
+        reachable,
+        port_data,
+        whois,
+        existing_priority,
+        existing_grouping,
+        existing_country,
+      } = dbData;
+
+      // 1. Находим или создаем хост
+      let host;
+      if (hostId) {
+        host = await Host.findByPk(hostId, { transaction });
       }
-      
-      if (port.type === "open") {
-        portData.open.push(portInfo)
-      } else if (port.type === "filtered") {
-        portData.filtered.push(portInfo)
+
+      if (!host) {
+        host = await Host.findOne({
+          where: { ip: ip },
+          transaction,
+        });
       }
-      portData.all.push(portInfo)
-    })
-  }
-  
-  // Формируем данные WHOIS
-  const whoisObject = {}
-  if (host.Whois && host.Whois.length > 0) {
-    host.Whois.forEach((whois) => {
-      if (whois.WhoisKey && whois.WhoisKey.key_name) {
-        whoisObject[whois.WhoisKey.key_name] = whois.value
+
+      if (!host) {
+        // Создаем новый хост
+        host = await Host.create(
+          {
+            ip: ip,
+            reachable: Boolean(reachable),
+            updated_at: new Date(),
+            // Используем существующие значения или значения по умолчанию
+            priority_id: existing_priority?.id || null,
+            grouping_id: existing_grouping?.id || null,
+            country_id: existing_country?.id || null,
+          },
+          { transaction }
+        );
+        console.log(`✅ Создан новый хост: ${ip}`);
+      } else {
+        // Обновляем существующий хост, сохраняем существующие значения
+        const updateData = {
+          reachable: Boolean(reachable),
+          updated_at: new Date(),
+        };
+
+        // Только если не null/undefined, сохраняем существующие значения
+        if (existing_priority !== undefined && existing_priority !== null) {
+          updateData.priority_id = existing_priority.id;
+        }
+        if (existing_grouping !== undefined && existing_grouping !== null) {
+          updateData.grouping_id = existing_grouping.id;
+        }
+        if (existing_country !== undefined && existing_country !== null) {
+          updateData.country_id = existing_country.id;
+        }
+
+        await host.update(updateData, { transaction });
+        console.log(`🔄 Обновлен существующий хост: ${ip}`);
       }
-    })
+
+      // 2. Обработка портов
+      console.log(`   🔌 Обработка портов для ${ip}...`);
+
+      // Удаляем старые порты
+      await Port.destroy({
+        where: { host_id: host.id },
+        transaction,
+      });
+
+      // Создаем новые порты
+      const portPromises = [];
+
+      // Для открытых портов
+      const openPorts = Array.isArray(port_data?.open) ? port_data.open : [];
+      for (const port of openPorts) {
+        const portNumber =
+          typeof port === "object" && port.port ? port.port : port;
+        portPromises.push(
+          Port.create(
+            {
+              host_id: host.id,
+              port: portNumber,
+              type: "open",
+            },
+            { transaction }
+          )
+        );
+      }
+
+      // Для filtered портов
+      const filteredPorts = Array.isArray(port_data?.filtered)
+        ? port_data.filtered
+        : [];
+      for (const port of filteredPorts) {
+        const portNumber =
+          typeof port === "object" && port.port ? port.port : port;
+        portPromises.push(
+          Port.create(
+            {
+              host_id: host.id,
+              port: portNumber,
+              type: "filtered",
+            },
+            { transaction }
+          )
+        );
+      }
+
+      if (portPromises.length > 0) {
+        await Promise.all(portPromises);
+        console.log(`   ✅ Порты созданы: ${portPromises.length} записей`);
+      }
+
+      // 3. Обработка WHOIS данных
+      console.log(`   📝 Обработка WHOIS данных для ${ip}...`);
+
+      // Удаляем старые WHOIS записи
+      await Whois.destroy({
+        where: { host_id: host.id },
+        transaction,
+      });
+
+      // Получаем разрешенные ключи WHOIS
+      const allowedKeys = await WhoisKey.findAll({
+        attributes: ["key_name"],
+        transaction,
+      });
+
+      const allowedKeyNames = new Set(allowedKeys.map((k) => k.key_name));
+
+      // Создаем новые WHOIS записи
+      const whoisPromises = Object.entries(whois || {})
+        .filter(([key]) => allowedKeyNames.has(key))
+        .filter(
+          ([key, value]) =>
+            value !== null && value !== undefined && value !== ""
+        )
+        .map(async ([key, value]) => {
+          const [whoisKey] = await WhoisKey.findOrCreate({
+            where: { key_name: key },
+            defaults: { key_name: key },
+            transaction,
+          });
+
+          return Whois.create(
+            {
+              host_id: host.id,
+              key_id: whoisKey.id,
+              value: String(value),
+            },
+            { transaction }
+          );
+        });
+
+      if (whoisPromises.length > 0) {
+        await Promise.all(whoisPromises);
+        console.log(
+          `   ✅ WHOIS данные созданы: ${whoisPromises.length} записей`
+        );
+      }
+
+      // 4. Коммит транзакции
+      await transaction.commit();
+      console.log(`   ✅ Транзакция закоммичена для IP ${ip}`);
+
+      return {
+        success: true,
+        hostId: host.id,
+        ip: ip,
+        priority_id: host.priority_id,
+        grouping_id: host.grouping_id,
+        country_id: host.country_id,
+      };
+    } catch (error) {
+      console.error(`❌ Ошибка при обновлении IP ${dbData.ip}:`, error);
+
+      if (transaction) {
+        try {
+          await transaction.rollback();
+          console.log(`↩️ Транзакция откатана для IP ${dbData.ip}`);
+        } catch (rollbackError) {
+          console.error(`❌ Ошибка при откате транзакции:`, rollbackError);
+        }
+      }
+
+      throw error;
+    }
   }
-  
-  // Форматируем данные как в useItemData
-  return {
-    id: host.id,
-    ip: host.ip,
-    reachable: host.reachable !== undefined ? host.reachable : false,
-    updated_at: host.updated_at,
-    port_data: portData,
-    priority_info: {
-      priority: host.Priority ? {
-        id: host.Priority.id,
-        name: host.Priority.name
-      } : null,
-      grouping: host.Grouping ? {
-        id: host.Grouping.id,
-        name: host.Grouping.name
-      } : null,
-      country: host.Country ? {
-        id: host.Country.id,
-        name: host.Country.name
-      } : null,
-      comment: host.comment || null
-    },
-    has_whois: Object.keys(whoisObject).length > 0,
-    whois_count: Object.keys(whoisObject).length,
-    port_count: {
-      total: portData.all.length,
-      open: portData.open.length,
-      filtered: portData.filtered.length
-    },
-    whois: Object.keys(whoisObject).length > 0 ? whoisObject : undefined
+
+  // Метод для форматирования данных одного хоста
+  static formatSingleHostData(host) {
+    if (!host) return null;
+
+    // Формируем данные портов
+    const portData = {
+      open: [],
+      filtered: [],
+      all: [],
+    };
+
+    if (host.Ports && host.Ports.length > 0) {
+      host.Ports.forEach((port) => {
+        const portInfo = {
+          port: port.port,
+          name: port.WellKnownPort ? port.WellKnownPort.name : null,
+          // protocol: "tcp",
+        };
+
+        if (port.type === "open") {
+          portData.open.push(portInfo);
+        } else if (port.type === "filtered") {
+          portData.filtered.push(portInfo);
+        }
+        portData.all.push(portInfo);
+      });
+    }
+
+    // Формируем данные WHOIS
+    const whoisObject = {};
+    if (host.Whois && host.Whois.length > 0) {
+      host.Whois.forEach((whois) => {
+        if (whois.WhoisKey && whois.WhoisKey.key_name) {
+          whoisObject[whois.WhoisKey.key_name] = whois.value;
+        }
+      });
+    }
+
+    // Форматируем данные как в useItemData
+    return {
+      id: host.id,
+      ip: host.ip,
+      reachable: host.reachable !== undefined ? host.reachable : false,
+      updated_at: host.updated_at,
+      port_data: portData,
+      priority_info: {
+        priority: host.Priority
+          ? {
+              id: host.Priority.id,
+              name: host.Priority.name,
+            }
+          : null,
+        grouping: host.Grouping
+          ? {
+              id: host.Grouping.id,
+              name: host.Grouping.name,
+            }
+          : null,
+        country: host.Country
+          ? {
+              id: host.Country.id,
+              name: host.Country.name,
+            }
+          : null,
+        comment: host.comment || null,
+      },
+      has_whois: Object.keys(whoisObject).length > 0,
+      whois_count: Object.keys(whoisObject).length,
+      port_count: {
+        total: portData.all.length,
+        open: portData.open.length,
+        filtered: portData.filtered.length,
+      },
+      whois: Object.keys(whoisObject).length > 0 ? whoisObject : undefined,
+    };
   }
-}
 
   // РАБОЧИЙ СТАРЫЙ Вспомогательный метод для обработки данных хоста
   // static async processHostData(
@@ -2196,44 +2255,44 @@ static formatSingleHostData(host) {
     return null;
   }
 
-static async addedJSONoneObj(
-  fileContent,
-  externalTransaction = null,
-  fileName = null
-) {
-  const shouldCommit = !externalTransaction;
-  const transaction = externalTransaction || (await sequelize.transaction());
+  static async addedJSONoneObj(
+    fileContent,
+    externalTransaction = null,
+    fileName = null
+  ) {
+    const shouldCommit = !externalTransaction;
+    const transaction = externalTransaction || (await sequelize.transaction());
 
-  try {
-    console.log(
-      `🔄 addedJSONoneObj: Начало обработки для IP ${fileContent.ip}, файл: "${fileName}"`
-    );
+    try {
+      console.log(
+        `🔄 addedJSONoneObj: Начало обработки для IP ${fileContent.ip}, файл: "${fileName}"`
+      );
 
-    const ip = fileContent.ip;
-    const reachable = fileContent.reachable;
-    const portData = fileContent.port_data || {};
-    const whoisData = fileContent.whois || {};
+      const ip = fileContent.ip;
+      const reachable = fileContent.reachable;
+      const portData = fileContent.port_data || {};
+      const whoisData = fileContent.whois || {};
 
-    if (!ip) {
-      throw new Error("IP адрес отсутствует в данных.");
-    }
+      if (!ip) {
+        throw new Error("IP адрес отсутствует в данных.");
+      }
 
-    console.log(
-      `   📊 Данные IP ${ip}: reachable=${reachable}, ports=${JSON.stringify(
-        portData
-      )}`
-    );
+      console.log(
+        `   📊 Данные IP ${ip}: reachable=${reachable}, ports=${JSON.stringify(
+          portData
+        )}`
+      );
 
- // 1. Сначала находим существующий хост (если есть)
-    const existingHost = await Host.findOne({
-      where: { ip: ip },
-      transaction
-    });
+      // 1. Сначала находим существующий хост (если есть)
+      const existingHost = await Host.findOne({
+        where: { ip: ip },
+        transaction,
+      });
 
-    // Сохраняем существующие значения
-    const existingPriorityId = existingHost?.priority_id;
-    const existingGroupingId = existingHost?.grouping_id;
-    const existingCountryId = existingHost?.country_id;
+      // Сохраняем существующие значения
+      const existingPriorityId = existingHost?.priority_id;
+      const existingGroupingId = existingHost?.grouping_id;
+      const existingCountryId = existingHost?.country_id;
 
       // 1. Находим или создаем источник файла
       let fileSource = null;
@@ -2347,22 +2406,22 @@ static async addedJSONoneObj(
       }
 
       // 2.1. Находим или создаем хост
- console.log(`   🔍 Поиск/создание хоста: ${ip}`);
-    let host = existingHost;
+      console.log(`   🔍 Поиск/создание хоста: ${ip}`);
+      let host = existingHost;
 
-    if (!host) {
-      console.log(`   ➕ Создание нового хоста: ${ip}`);
-      host = await Host.create(
-        {
-          ip: ip,
-          reachable: Boolean(reachable),
-          updated_at: new Date(),
-          // Устанавливаем значения по умолчанию или существующие
-          grouping_id: existingGroupingId || defaultGrouping.id,
-          country_id: existingCountryId || defaultCountry.id,
-        },
-        { transaction }
-      );
+      if (!host) {
+        console.log(`   ➕ Создание нового хоста: ${ip}`);
+        host = await Host.create(
+          {
+            ip: ip,
+            reachable: Boolean(reachable),
+            updated_at: new Date(),
+            // Устанавливаем значения по умолчанию или существующие
+            grouping_id: existingGroupingId || defaultGrouping.id,
+            country_id: existingCountryId || defaultCountry.id,
+          },
+          { transaction }
+        );
         console.log(
           `   ✅ Создан хост: ID=${host.id}, IP=${host.ip}, reachable=${host.reachable}`
         );
@@ -2371,15 +2430,17 @@ static async addedJSONoneObj(
           `   🔄 Обновление существующего хоста: ID=${host.id}, IP=${host.ip}`
         );
         await host.update(
-        {
-          reachable: Boolean(reachable),
-          updated_at: new Date(),
-          // Сохраняем существующие значения, если они есть
-          grouping_id: existingGroupingId || host.grouping_id || defaultGrouping.id,
-          country_id: existingCountryId || host.country_id || defaultCountry.id,
-        },
-        { transaction }
-      );
+          {
+            reachable: Boolean(reachable),
+            updated_at: new Date(),
+            // Сохраняем существующие значения, если они есть
+            grouping_id:
+              existingGroupingId || host.grouping_id || defaultGrouping.id,
+            country_id:
+              existingCountryId || host.country_id || defaultCountry.id,
+          },
+          { transaction }
+        );
         console.log(
           `   ✅ Хост обновлен: ID=${host.id}, reachable=${host.reachable}`
         );
@@ -2973,8 +3034,8 @@ static async addedJSONoneObj(
           const portInfo = {
             port: port.port,
             // state: port.type || "unknown",
-            service: port.WellKnownPort ? port.WellKnownPort.name : null,
-            protocol: port.protocol || "tcp",
+            name: port.WellKnownPort ? port.WellKnownPort.name : null,
+            // protocol: port.protocol || "tcp",
             // created_at: port.created_at,
             // updated_at: port.updated_at,
           };
@@ -3056,7 +3117,6 @@ static async addedJSONoneObj(
       return hostData;
     });
   }
-
 
   static async scanVersionDetection(ip) {
     try {
