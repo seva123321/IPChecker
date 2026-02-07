@@ -84,31 +84,18 @@ export function isTCPPortOpen(ip, port = 80, timeout = 1000) {
 }
 
 export async function checkReachability(ip, timeout = 1000) {
-
   try {
-    // Параллельная проверка для скорости
-    const [tcpSuccess, icmpSuccess] = await Promise.race([
-      Promise.allSettled([
-        isTCPPortOpen(ip, 80, timeout),
-        ping(ip, timeout)
-      ]),
-      // Общий таймаут для всей операции
-      new Promise(resolve => setTimeout(
-        () => resolve([{status: 'rejected'}, {status: 'rejected'}]),
-        timeout * 2
-      ))
+    // Параллельная проверка TCP и ICMP
+    const [tcpCheck, pingCheck] = await Promise.allSettled([
+      isTCPPortOpen(ip, 80, timeout),
+      ping(ip, timeout)
     ]);
 
-    const tcpAvailable = tcpSuccess.status === 'fulfilled' && tcpSuccess.value;
-    const icmpAvailable = icmpSuccess.status === 'fulfilled' && icmpSuccess.value;
+    const tcpAvailable = tcpCheck.status === 'fulfilled' && tcpCheck.value === true;
+    const icmpAvailable = pingCheck.status === 'fulfilled' && pingCheck.value === true;
 
-    if (tcpAvailable) {
-      console.log(`✓ Хост ${ip} доступен по TCP порту 80`);
-      return true;
-    }
-
-    if (icmpAvailable) {
-      console.log(`✓ Хост ${ip} доступен по ICMP (ping)`);
+    if (tcpAvailable || icmpAvailable) {
+      console.log(`✓ Хост ${ip} доступен (TCP: ${tcpAvailable}, ICMP: ${icmpAvailable})`);
       return true;
     }
 
@@ -121,7 +108,81 @@ export async function checkReachability(ip, timeout = 1000) {
   }
 }
 
+//! ДОСТУПНОСТЬ НА ОСНОВЕ NMAP - не используется
+/**
+ * Проверка доступности хоста через nmap
+ * @param {string} ip - IP адрес для проверки
+ * @param {number} timeout - Таймаут в секундах
+ * @returns {Promise<boolean>} - true если хост доступен
+ */
+export async function checkReachabilityWithNmap(ip, timeout = 5) {
+  try {
+    // Быстрая проверка доступности через nmap
+    // -sn: только проверка доступности (no port scan)
+    // -PE: использовать ICMP echo
+    // -PS80: TCP SYN на порт 80
+    // -PA443: TCP ACK на порт 443
+    // -PU53: UDP на порт 53 (DNS)
+    const command = `nmap -sn -PE -PS80,443 -PA80,443 -PU53 --max-retries 1 --host-timeout ${timeout}s ${ip}`;
+    
+    const { stdout } = await execAsync(command, { timeout: (timeout + 2) * 1000 });
+    
+    // Анализируем вывод nmap
+    const lines = stdout.split('\n');
+    
+    for (const line of lines) {
+      // Хост доступен если есть "Host is up"
+      if (line.includes('Host is up')) {
+        console.log(`✓ Nmap: хост ${ip} доступен`);
+        return true;
+      }
+      
+      // Хост недоступен если есть "Host seems down"
+      if (line.includes('Host seems down') || line.includes('0 hosts up')) {
+        console.log(`✗ Nmap: хост ${ip} недоступен`);
+        return false;
+      }
+    }
+    
+    console.log(`? Nmap: статус хоста ${ip} неопределенный`);
+    return false;
+    
+  } catch (error) {
+    console.error(`Ошибка nmap при проверке доступности ${ip}:`, error.message);
+    return false;
+  }
+}
 
+/**
+ * Улучшенная проверка доступности с fallback на старые методы
+ */
+export async function checkReachabilityEnhanced(ip, timeout = 2000) {
+  try {
+    // Сначала пробуем nmap
+    const nmapReachable = await checkReachabilityWithNmap(ip, Math.ceil(timeout / 1000));
+    
+    if (nmapReachable) {
+      return true;
+    }
+    
+    // Если nmap не дал результата, пробуем старые методы как fallback
+    const [tcpSuccess, icmpSuccess] = await Promise.allSettled([
+      isTCPPortOpen(ip, 443, timeout), // Добавляем проверку порта 443
+      ping(ip, timeout)
+    ]);
+    
+    const tcpAvailable = tcpSuccess.status === 'fulfilled' && tcpSuccess.value;
+    const icmpAvailable = icmpSuccess.status === 'fulfilled' && icmpSuccess.value;
+    
+    return tcpAvailable || icmpAvailable;
+    
+  } catch (error) {
+    console.error(`Ошибка при проверке доступности ${ip}:`, error.message);
+    return false;
+  }
+}
+
+/************** */
 
 //! РАБОЧИЙ КОД
 // import { createConnection } from 'net';

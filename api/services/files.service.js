@@ -5,6 +5,7 @@ import {
   isLocalIp,
   scanPortsSimple,
   scanVersionDetection,
+  scanPortsWithReachabilityCheck,
   checkReachability,
   WhoisClient,
 } from "../utils/index.js";
@@ -33,7 +34,6 @@ const SCALING_CONFIG = {
     batchSize: 25,
     ipConcurrency: 5,
     portScanTimeout: 15000,
-    reachabilityTimeout: 2000,
   },
   MEDIUM: {
     // 100-500 IP
@@ -41,7 +41,6 @@ const SCALING_CONFIG = {
     batchSize: 50,
     ipConcurrency: 8,
     portScanTimeout: 10000,
-    reachabilityTimeout: 1500,
   },
   LARGE: {
     // 500+ IP
@@ -49,7 +48,6 @@ const SCALING_CONFIG = {
     batchSize: 100,
     ipConcurrency: 12,
     portScanTimeout: 8000,
-    reachabilityTimeout: 1000,
   },
 };
 
@@ -105,7 +103,6 @@ export default class FileService {
 
       let result;
       if (uniqueIPs.length > 100) {
-        // Передаем fileName в processLargeBatch
         result = await FileService.processLargeBatch(
           uniqueIPs,
           config,
@@ -113,7 +110,6 @@ export default class FileService {
           progressCallback
         );
       } else {
-        // Передаем fileName в processStandardBatch
         result = await FileService.processStandardBatch(
           uniqueIPs,
           config,
@@ -134,7 +130,6 @@ export default class FileService {
         const session = sessionManager.createSession(clientId);
         await FileService.saveProcessedFile(fileName, result, session.id);
 
-        // Возвращаем sessionId для клиента
         return {
           ...result,
           sessionId: session.id,
@@ -154,7 +149,6 @@ export default class FileService {
   }
 
   static getScalingConfig(ipCount) {
-    // Исправлено: убрал лишний пробел
     if (ipCount <= 100) {
       return { ...SCALING_CONFIG.SMALL, mode: "SMALL" };
     } else if (ipCount <= 500) {
@@ -165,12 +159,10 @@ export default class FileService {
   }
 
   static async getCachedWhois(ip) {
-    // Проверяем кеш
     if (whoisCache.has(ip)) {
       return whoisCache.get(ip);
     }
 
-    // Выполняем запрос
     const whoisClient = new WhoisClient();
     const result = await Promise.race([
       whoisClient.getWhois(ip),
@@ -179,10 +171,8 @@ export default class FileService {
       ),
     ]);
 
-    // Сохраняем в кеш
     whoisCache.set(ip, result);
 
-    // Ограничиваем размер кеша
     if (whoisCache.size > 500) {
       const firstKey = whoisCache.keys().next().value;
       whoisCache.delete(firstKey);
@@ -208,8 +198,9 @@ export default class FileService {
 
     let globalSuccessCount = 0;
     let globalFailedCount = 0;
+    let globalSkippedCount = 0;
+    let globalReachableCount = 0;
     const allResults = [];
-    let processedBatches = 0;
 
     const batchLimit = pLimit(config.concurrentBatches);
 
@@ -222,7 +213,6 @@ export default class FileService {
             }, файл: ${fileName}`
           );
 
-          // Прогресс начала батча
           progressCallback({
             type: "batch_start",
             batchIndex: batchIndex + 1,
@@ -231,21 +221,19 @@ export default class FileService {
             fileName: fileName,
           });
 
-          // Передаем fileName в processOptimizedBatch
           const batchResults = await FileService.processOptimizedBatch(
             batch,
-            batchIndex,
             config,
             fileName
           );
 
           globalSuccessCount += batchResults.successful;
           globalFailedCount += batchResults.failed;
+          globalSkippedCount += batchResults.skipped || 0;
+          globalReachableCount += batchResults.reachable || 0;
           allResults.push(...batchResults.details);
-          processedBatches++;
-
-          // Прогресс завершения батча
-          const processedIPs = globalSuccessCount + globalFailedCount;
+          
+          const processedIPs = globalSuccessCount + globalFailedCount + globalSkippedCount;
           const progress = Math.round((processedIPs / uniqueIPs.length) * 100);
 
           progressCallback({
@@ -254,6 +242,8 @@ export default class FileService {
             totalBatches: batches.length,
             successful: batchResults.successful,
             failed: batchResults.failed,
+            skipped: batchResults.skipped || 0,
+            reachable: batchResults.reachable || 0,
             processedIPs: processedIPs,
             totalIPs: uniqueIPs.length,
             progress: progress,
@@ -263,7 +253,7 @@ export default class FileService {
           console.log(
             `📊 Прогресс батча ${batchIndex + 1}: ${processedIPs}/${
               uniqueIPs.length
-            } IP (${progress}%), файл: ${fileName}`
+            } IP (${progress}%), Доступно: ${batchResults.reachable || 0}/${batch.length}, файл: ${fileName}`
           );
         } catch (batchError) {
           console.error(
@@ -284,36 +274,39 @@ export default class FileService {
 
     const batchResults = await Promise.allSettled(batchPromises);
 
-    // Статистика по батчам
     const successfulBatches = batchResults.filter(
       (r) => r.status === "fulfilled"
     ).length;
+    
     console.log(
       `\n✅ Обработка завершена: ${successfulBatches}/${batches.length} батчей успешно, файл: ${fileName}`
     );
     console.log(
-      `🎯 Итог: ${globalSuccessCount}/${uniqueIPs.length} IP обработано`
+      `🎯 Итог: ${globalSuccessCount}/${uniqueIPs.length} IP обработано, Доступно: ${globalReachableCount}`
     );
 
-    // Очистка кеша
-    whoisCache.clear();
-
     return {
-      message: `Обработано ${globalSuccessCount} из ${uniqueIPs.length} IP-адресов`,
+      message: `Обработано ${globalSuccessCount} из ${uniqueIPs.length} IP-адресов, Доступно: ${globalReachableCount}`,
       total: uniqueIPs.length,
       successful: globalSuccessCount,
       failed: globalFailedCount,
+      skipped: globalSkippedCount,
+      reachable: globalReachableCount,
       statistics: {
         success_rate:
           ((globalSuccessCount / uniqueIPs.length) * 100).toFixed(1) + "%",
+        availability_rate:
+          ((globalReachableCount / uniqueIPs.length) * 100).toFixed(1) + "%",
         batches_processed: `${successfulBatches}/${batches.length}`,
-        whois_cache_size: whoisCache.size,
       },
       details: {
         successful_ips: allResults
           .filter((r) => r.success && !r.skipped)
           .map((r) => r.ip),
         skipped_ips: allResults.filter((r) => r.skipped).map((r) => r.ip),
+        reachable_ips: allResults
+          .filter((r) => r.reachable && !r.skipped)
+          .map((r) => r.ip),
         failed_ips: allResults
           .filter((r) => r.error)
           .map((r) => ({ ip: r.ip, error: r.error })),
@@ -323,20 +316,19 @@ export default class FileService {
 
   static async processOptimizedBatch(
     batch,
-    batchIndex,
     config,
-    fileName = null,
-    progressCallback = () => {}
+    fileName = null
   ) {
     const ipLimit = pLimit(config.ipConcurrency);
     let batchSuccessCount = 0;
     let batchFailedCount = 0;
+    let batchSkippedCount = 0;
+    let batchReachableCount = 0;
     const batchResults = [];
 
     const batchPromises = batch.map((ip) =>
       ipLimit(async () => {
         try {
-          // Добавляем проверку на существование IP
           if (!ip || ip === "unknown") {
             return { ip: ip || "unknown", error: "Invalid IP address" };
           }
@@ -345,25 +337,76 @@ export default class FileService {
             return { ip, skipped: true, reason: "Local IP" };
           }
 
-          // Передаем fileName в processIPOptimized
-          const result = await FileService.processIPOptimized(
-            ip,
-            batchIndex,
-            config,
-            fileName
-          );
+          // Используем scanPortsWithReachabilityCheck
+          const scanResult = await Promise.race([
+            scanPortsWithReachabilityCheck(ip),
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error("Port scan timeout")),
+                config.portScanTimeout
+              )
+            ),
+          ]).catch((timeoutError) => {
+            console.warn(
+              `Таймаут сканирования для ${ip}:`,
+              timeoutError.message
+            );
+            return { 
+              open: [], 
+              filtered: [], 
+              reachable: false 
+            };
+          });
 
-          if (result.success) {
-            batchSuccessCount++;
-          } else {
-            batchFailedCount++;
+          // Получаем WHOIS данные
+          let whoisData = {};
+          try {
+            whoisData = await FileService.getCachedWhois(ip);
+          } catch (whoisError) {
+            console.warn(`Ошибка WHOIS для ${ip}:`, whoisError.message);
+          }
+
+          // Формируем данные для БД
+          const dbData = {
+            ip: ip,
+            reachable: scanResult.reachable || false,
+            port_data: {
+              open: scanResult.open || [],
+              filtered: scanResult.filtered || []
+            },
+            whois: whoisData || {},
+          };
+
+          // Сохраняем в базу
+          try {
+            await FileService.addedJSONoneObj(dbData, null, fileName);
+          } catch (dbError) {
+            console.error(`Ошибка записи для IP ${ip}:`, dbError.message);
+          }
+
+          const result = {
+            ip,
+            success: true,
+            reachable: scanResult.reachable,
+            openPorts: scanResult.open || [],
+            filteredPorts: scanResult.filtered || []
+          };
+
+          batchSuccessCount++;
+          if (scanResult.reachable) {
+            batchReachableCount++;
           }
 
           return result;
+          
         } catch (error) {
           batchFailedCount++;
           console.error(`❌ Ошибка обработки IP ${ip}:`, error.message);
-          return { ip: ip || "unknown", error: error.message };
+          return { 
+            ip: ip || "unknown", 
+            error: error.message,
+            success: false 
+          };
         }
       })
     );
@@ -372,11 +415,19 @@ export default class FileService {
 
     results.forEach((result) => {
       if (result.status === "fulfilled") {
-        batchResults.push(result.value);
+        const value = result.value;
+        batchResults.push(value);
+        
+        if (value.skipped) {
+          batchSkippedCount++;
+          batchSuccessCount--;
+        }
       } else {
+        batchFailedCount++;
         batchResults.push({
           ip: "unknown",
           error: result.reason?.message || "Unknown error",
+          success: false
         });
       }
     });
@@ -384,6 +435,8 @@ export default class FileService {
     return {
       successful: batchSuccessCount,
       failed: batchFailedCount,
+      skipped: batchSkippedCount,
+      reachable: batchReachableCount,
       details: batchResults,
     };
   }
@@ -396,238 +449,73 @@ export default class FileService {
         `🔍 [Батч ${batchIndex}] Начало обработки IP: ${ip}, файл: "${fileName}"`
       );
 
-      // 1. Проверка доступности
-      // console.log(`   📡 Проверка доступности ${ip}...`);
-      const reachable = await checkReachability(ip, config.reachabilityTimeout);
-      // console.log(`   📡 ${ip} доступен: ${reachable}`);
+      // Используем scanPortsWithReachabilityCheck
+      const scanResult = await Promise.race([
+        scanPortsWithReachabilityCheck(ip),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Port scan timeout")),
+            config.portScanTimeout
+          )
+        ),
+      ]).catch((timeoutError) => {
+        console.warn(
+          `Таймаут сканирования для ${ip}:`,
+          timeoutError.message
+        );
+        return { 
+          open: [], 
+          filtered: [], 
+          reachable: false 
+        };
+      });
 
-      let portScanResult = { open: [], filtered: [] };
       let whoisData = {};
-      let dataOsService = {};
-
-      // 2. Получение данных только для доступных хостов
-      if (reachable) {
+      if (scanResult.reachable) {
         try {
-          // console.log(`   🔌 Сканирование портов для ${ip}...`);
-          const [portResult, whoisResult] = await Promise.allSettled([
-            scanPortsSimple(ip).catch(() => ({ open: [], filtered: [] })),
-            FileService.getCachedWhois(ip).catch(() => ({})),
-          ]);
-
-          portScanResult =
-            portResult.status === "fulfilled"
-              ? {
-                  open: portResult.value.open,
-                  filtered: portResult.value.filtered,
-                } //portResult.value
-              : { open: [], filtered: [] };
-          dataOsService =
-            portResult.status === "fulfilled" &&
-            portResult.value.os &&
-            portResult.value.services
-              ? { os: portResult.value.os, services: portResult.value.services }
-              : {};
-          whoisData =
-            whoisResult.status === "fulfilled" ? whoisResult.value : {};
-
-          // console.log(
-          //   `   🔌 ${ip}: найдено ${portScanResult.open.length} открытых портов, ${portScanResult.filtered.length} фильтрованных портов`
-          // );
-          // console.log(
-          //   `   📝 ${ip}: получено ${
-          //     Object.keys(whoisData).length
-          //   } WHOIS записей`
-          // );
-        } catch (error) {
-          console.error(
-            `   ❌ Ошибка получения данных для ${ip}:`,
-            error.message
-          );
+          whoisData = await FileService.getCachedWhois(ip);
+        } catch (whoisError) {
+          console.warn(`Ошибка WHOIS для ${ip}:`, whoisError.message);
         }
       }
 
-      // 3. Подготовка данных для сохранения
+      // Формируем данные для БД
       const dbData = {
         ip: ip,
-        reachable: reachable,
-        port_data: portScanResult,
-        other_data: dataOsService,
+        reachable: scanResult.reachable,
+        port_data: {
+          open: scanResult.open || [],
+          filtered: scanResult.filtered || []
+        },
         whois: whoisData,
       };
 
-      // console.log(`   💾 Вызов addedJSONoneObj для ${ip}...`);
-
-      // 4. Сохраняем в базу
+      // Сохраняем в базу
       const result = await FileService.addedJSONoneObj(dbData, null, fileName);
 
       const processingTime = Date.now() - startTime;
       console.log(
-        `✅ [Батч ${batchIndex}] ${ip} - обработан за ${processingTime}мс, результат:`,
-        result
+        `✅ [Батч ${batchIndex}] ${ip} - обработан за ${processingTime}мс, доступен: ${scanResult.reachable}`
       );
 
-      return { ip, success: true, ...result };
+      return { 
+        ip, 
+        success: true, 
+        reachable: scanResult.reachable,
+        ...result 
+      };
     } catch (error) {
       const processingTime = Date.now() - startTime;
       console.error(
         `❌ [Батч ${batchIndex}] ${ip} - ошибка за ${processingTime}мс:`,
         error.message
       );
-      console.error("   Stack:", error.stack);
-      return { ip, success: false, error: error.message };
+      return { 
+        ip, 
+        success: false, 
+        error: error.message 
+      };
     }
-  }
-
-  static async processStandardBatch(
-    uniqueIPs,
-    config,
-    fileName = null,
-    progressCallback = () => {}
-  ) {
-    console.log(
-      `🔧 Стандартная обработка для ${uniqueIPs.length} IP, файл: ${fileName}`
-    );
-
-    const limit = pLimit(config.ipConcurrency);
-    const chunkSize = config.batchSize;
-    const chunks = [];
-
-    for (let i = 0; i < uniqueIPs.length; i += chunkSize) {
-      chunks.push(uniqueIPs.slice(i, i + chunkSize));
-    }
-
-    let allResults = [];
-    let successfulCount = 0;
-    let failedCount = 0;
-
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      console.log(
-        `Обрабатываем часть ${i + 1}/${chunks.length} (${
-          chunk.length
-        } IP), файл: ${fileName}`
-      );
-
-      // Отправляем событие начала батча
-      progressCallback({
-        type: "batch_start",
-        batchIndex: i + 1,
-        totalBatches: chunks.length,
-        batchSize: chunk.length,
-        fileName: fileName,
-      });
-
-      const chunkResults = await Promise.allSettled(
-        chunk.map((ip) => {
-          if (isLocalIp(ip)) {
-            return Promise.resolve({ ip, error: "Local IP address skipped" });
-          }
-
-          return limit(async () => {
-            try {
-              const reachable = await checkReachability(
-                ip,
-                config.reachabilityTimeout
-              );
-
-              let portScanResult = { open: [], filtered: [] };
-              try {
-                portScanResult = await Promise.race([
-                  scanPortsSimple(ip),
-                  new Promise((_, reject) =>
-                    setTimeout(
-                      () => reject(new Error("Timeout")),
-                      config.portScanTimeout
-                    )
-                  ),
-                ]);
-              } catch (timeoutError) {
-                console.warn(
-                  `Таймаут сканирования портов для ${ip}:`,
-                  timeoutError.message
-                );
-              }
-
-              const whoisData = await FileService.getCachedWhois(ip).catch(
-                () => ({})
-              );
-
-              const dbData = {
-                ip: ip,
-                reachable: reachable,
-                port_data: portScanResult,
-                whois: whoisData,
-              };
-
-              // Передаем fileName в addedJSONoneObj
-              await FileService.addedJSONoneObj(dbData, null, fileName);
-              return { ip, success: true };
-            } catch (scanError) {
-              console.error(`Ошибка при обработке IP ${ip}:`, scanError);
-              return { ip, error: scanError.message };
-            }
-          });
-        })
-      );
-
-      allResults = allResults.concat(chunkResults);
-
-      // Обновляем счетчики
-      const chunkSuccessful = chunkResults.filter(
-        (result) => result.status === "fulfilled" && !result.value.error
-      ).length;
-      const chunkFailed = chunkResults.length - chunkSuccessful;
-
-      successfulCount += chunkSuccessful;
-      failedCount += chunkFailed;
-
-      // Отправляем прогресс после каждого батча
-      const processedIPs = successfulCount + failedCount;
-      const progress = Math.round((processedIPs / uniqueIPs.length) * 100);
-
-      progressCallback({
-        type: "batch_complete",
-        batchIndex: i + 1,
-        totalBatches: chunks.length,
-        processedIPs: processedIPs,
-        totalIPs: uniqueIPs.length,
-        progress: progress,
-        successful: successfulCount,
-        failed: failedCount,
-        fileName: fileName,
-      });
-
-      console.log(
-        `📊 Прогресс: ${processedIPs}/${uniqueIPs.length} IP (${progress}%), файл: ${fileName}`
-      );
-
-      // Пауза между чанками
-      if (i < chunks.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-    }
-
-    console.log(
-      `Обработка завершена. Всего: ${uniqueIPs.length}, Успешно: ${successfulCount}, Неудачно: ${failedCount}, файл: ${fileName}`
-    );
-
-    return {
-      message: `Обработка завершена. Всего: ${uniqueIPs.length}, Успешно: ${successfulCount}, Неудачно: ${failedCount}`,
-      total: uniqueIPs.length,
-      successful: successfulCount,
-      failed: failedCount,
-      details: {
-        successful_ips: allResults
-          .filter((r) => r.status === "fulfilled" && !r.value.error)
-          .map((r) => r.value.ip),
-        failed_ips: allResults
-          .filter((r) => r.status === "rejected" || r.value.error)
-          .map((r) => ({
-            ip: r.status === "fulfilled" ? r.value.ip : "unknown",
-            error: r.status === "rejected" ? r.reason?.message : r.value.error,
-          })),
-      },
-    };
   }
 
   static async processStandardBatch(
@@ -644,23 +532,28 @@ export default class FileService {
     const chunkSize = config.batchSize;
     const totalChunks = Math.ceil(uniqueIPs.length / chunkSize);
 
-    // Предварительное кэширование WHOIS для всех IP
-    const whoisCache = new Map();
+    // Локальный кеш для WHOIS
+    const localWhoisCache = new Map();
 
-    // Предзагрузка WHOIS данных асинхронно
     const preloadWhois = async (ip) => {
       if (isLocalIp(ip)) return null;
+      
+      if (localWhoisCache.has(ip)) {
+        return localWhoisCache.get(ip);
+      }
+      
       try {
         const data = await FileService.getCachedWhois(ip);
-        whoisCache.set(ip, data);
+        localWhoisCache.set(ip, data);
         return data;
       } catch {
-        whoisCache.set(ip, {});
-        return {};
+        const emptyData = {};
+        localWhoisCache.set(ip, emptyData);
+        return emptyData;
       }
     };
 
-    // Параллельная предзагрузка WHOIS для первой порции IP
+    // Параллельная предзагрузка WHOIS
     const initialPreload = uniqueIPs
       .slice(0, Math.min(uniqueIPs.length, config.ipConcurrency * 2))
       .map((ip) => limit(() => preloadWhois(ip)));
@@ -670,8 +563,8 @@ export default class FileService {
     let allResults = [];
     let successfulCount = 0;
     let failedCount = 0;
+    let skippedCount = 0;
 
-    // Обработка с использованием for...of для асинхронных итераций
     for (let i = 0; i < uniqueIPs.length; i += chunkSize) {
       const chunk = uniqueIPs.slice(i, i + chunkSize);
       const chunkIndex = Math.floor(i / chunkSize) + 1;
@@ -684,7 +577,7 @@ export default class FileService {
       if (i + chunkSize < uniqueIPs.length) {
         const nextChunk = uniqueIPs.slice(i + chunkSize, i + 2 * chunkSize);
         nextChunk.forEach((ip) => {
-          if (!whoisCache.has(ip) && !isLocalIp(ip)) {
+          if (!localWhoisCache.has(ip) && !isLocalIp(ip)) {
             limit(() => preloadWhois(ip)).catch(() => {});
           }
         });
@@ -698,7 +591,7 @@ export default class FileService {
         fileName: fileName,
       });
 
-      // Оптимизированная обработка чанка
+      // Обработка чанка с использованием scanPortsWithReachabilityCheck
       const chunkPromises = chunk.map((ip) => {
         if (isLocalIp(ip)) {
           return Promise.resolve({
@@ -710,42 +603,47 @@ export default class FileService {
 
         return limit(async () => {
           try {
-            // Параллельная проверка доступности и сканирование портов
-            const [reachable, portScanResult] = await Promise.all([
-              checkReachability(ip, config.reachabilityTimeout),
-              Promise.race([
-                scanPortsSimple(ip),
-                new Promise((_, reject) =>
-                  setTimeout(
-                    () => reject(new Error("Port scan timeout")),
-                    config.portScanTimeout
-                  )
-                ),
-              ]).catch((timeoutError) => {
-                console.warn(
-                  `Таймаут сканирования портов для ${ip}:`,
-                  timeoutError.message
-                );
-                return { open: [], filtered: [] };
-              }),
-            ]);
+            // Используем единый вызов nmap для проверки доступности и сканирования портов
+            const scanResult = await Promise.race([
+              scanPortsWithReachabilityCheck(ip),
+              new Promise((_, reject) =>
+                setTimeout(
+                  () => reject(new Error("Port scan timeout")),
+                  config.portScanTimeout
+                )
+              ),
+            ]).catch((timeoutError) => {
+              console.warn(
+                `Таймаут сканирования для ${ip}:`,
+                timeoutError.message
+              );
+              return { 
+                open: [], 
+                filtered: [], 
+                reachable: false 
+              };
+            });
 
-            // Получаем WHOIS из кэша или загружаем
+            // Получаем WHOIS данные
             let whoisData;
-            if (whoisCache.has(ip)) {
-              whoisData = whoisCache.get(ip);
+            if (localWhoisCache.has(ip)) {
+              whoisData = localWhoisCache.get(ip);
             } else {
               whoisData = await preloadWhois(ip);
             }
 
+            // Формируем данные для сохранения в БД
             const dbData = {
               ip: ip,
-              reachable: reachable,
-              port_data: portScanResult || { open: [], filtered: [] },
+              reachable: scanResult.reachable || false,
+              port_data: {
+                open: scanResult.open || [],
+                filtered: scanResult.filtered || []
+              },
               whois: whoisData || {},
             };
 
-            // Параллельная запись в базу данных
+            // Сохраняем в базу данных
             await Promise.race([
               FileService.addedJSONoneObj(dbData, null, fileName),
               new Promise((_, reject) =>
@@ -758,10 +656,18 @@ export default class FileService {
               console.error(`Ошибка записи для IP ${ip}:`, dbError.message);
             });
 
-            return { ip, success: true };
-          } catch (scanError) {
-            console.error(`Ошибка при обработке IP ${ip}:`, scanError);
-            return { ip, error: scanError.message };
+            return { 
+              ip, 
+              success: true,
+              reachable: scanResult.reachable
+            };
+          } catch (error) {
+            console.error(`Ошибка при обработке IP ${ip}:`, error);
+            return { 
+              ip, 
+              error: error.message,
+              success: false 
+            };
           }
         });
       });
@@ -769,29 +675,35 @@ export default class FileService {
       const chunkResults = await Promise.allSettled(chunkPromises);
       allResults = allResults.concat(chunkResults);
 
-      // Оптимизированный подсчет результатов
+      // Подсчет результатов
       const chunkStats = chunkResults.reduce(
         (acc, result) => {
           if (result.status === "fulfilled") {
-            if (result.value.skipped) {
+            const value = result.value;
+            
+            if (value.skipped) {
               acc.skipped++;
-            } else if (result.value.error) {
+            } else if (value.error) {
               acc.failed++;
             } else {
               acc.successful++;
+              if (value.reachable) {
+                acc.reachable++;
+              }
             }
           } else {
             acc.failed++;
           }
           return acc;
         },
-        { successful: 0, failed: 0, skipped: 0 }
+        { successful: 0, failed: 0, skipped: 0, reachable: 0 }
       );
 
       successfulCount += chunkStats.successful;
       failedCount += chunkStats.failed;
+      skippedCount += chunkStats.skipped;
 
-      const processedIPs = successfulCount + failedCount;
+      const processedIPs = successfulCount + failedCount + skippedCount;
       const progress = Math.round((processedIPs / uniqueIPs.length) * 100);
 
       progressCallback({
@@ -803,38 +715,51 @@ export default class FileService {
         progress: progress,
         successful: successfulCount,
         failed: failedCount,
+        skipped: skippedCount,
+        reachable: chunkStats.reachable,
         fileName: fileName,
       });
 
       console.log(
-        `📊 Прогресс: ${processedIPs}/${uniqueIPs.length} IP (${progress}%), файл: ${fileName}`
+        `📊 Прогресс: ${processedIPs}/${uniqueIPs.length} IP (${progress}%), ` +
+        `Доступно: ${chunkStats.reachable}/${chunk.length}, файл: ${fileName}`
       );
 
-      // Динамическая пауза между чанками (меньше при успешной обработке)
+      // Пауза между чанками
       if (chunkIndex < totalChunks) {
-        const pauseTime =
-          chunkStats.failed > chunkStats.successful * 0.1 ? 2000 : 500;
+        const pauseTime = chunkStats.failed > 0 ? 1500 : 500;
         await new Promise((resolve) => setTimeout(resolve, pauseTime));
       }
     }
 
     console.log(
-      `Обработка завершена. Всего: ${uniqueIPs.length}, Успешно: ${successfulCount}, Неудачно: ${failedCount}, файл: ${fileName}`
+      `Обработка завершена. Всего: ${uniqueIPs.length}, ` +
+      `Успешно: ${successfulCount}, Неудачно: ${failedCount}, ` +
+      `Пропущено: ${skippedCount}, файл: ${fileName}`
     );
 
-    // Оптимизированное формирование результатов
+    // Формирование результатов
     const successfulIPs = [];
     const failedIPs = [];
+    const skippedIPs = [];
+    const reachableIPs = [];
 
     for (const result of allResults) {
       if (result.status === "fulfilled") {
-        if (result.value.error) {
+        const value = result.value;
+        
+        if (value.skipped) {
+          skippedIPs.push(value.ip);
+        } else if (value.error) {
           failedIPs.push({
-            ip: result.value.ip,
-            error: result.value.error,
+            ip: value.ip,
+            error: value.error,
           });
-        } else if (!result.value.skipped) {
-          successfulIPs.push(result.value.ip);
+        } else {
+          successfulIPs.push(value.ip);
+          if (value.reachable) {
+            reachableIPs.push(value.ip);
+          }
         }
       } else {
         failedIPs.push({
@@ -845,14 +770,19 @@ export default class FileService {
     }
 
     return {
-      message: `Обработка завершена. Всего: ${uniqueIPs.length}, Успешно: ${successfulCount}, Неудачно: ${failedCount}`,
+      message: `Обработка завершена. Всего: ${uniqueIPs.length}, ` +
+              `Успешно: ${successfulCount}, Неудачно: ${failedCount}, ` +
+              `Пропущено: ${skippedCount}, Доступно: ${reachableIPs.length}`,
       total: uniqueIPs.length,
       successful: successfulCount,
-      failed: failedIPs.length,
-      // failed: failedCount,
+      failed: failedCount,
+      skipped: skippedCount,
+      reachable: reachableIPs.length,
       details: {
         successful_ips: successfulIPs,
         failed_ips: failedIPs,
+        skipped_ips: skippedIPs,
+        reachable_ips: reachableIPs,
       },
     };
   }
@@ -1527,7 +1457,6 @@ export default class FileService {
     try {
       console.log(`🔍 Сканирование и обновление одного IP: ${ip}`);
 
-      // 1. Сначала получаем текущие данные хоста из базы
       const existingHost = await Host.findOne({
         where: { ip: ip },
         include: [
@@ -1546,12 +1475,10 @@ export default class FileService {
         ],
       });
 
-      // Сохраняем существующие значения
       const existingPriority = existingHost?.Priority;
       const existingGrouping = existingHost?.Grouping;
       const existingCountry = existingHost?.Country;
 
-      // 2. Проверяем, что IP не локальный
       if (isLocalIp(ip)) {
         return {
           success: false,
@@ -1566,61 +1493,47 @@ export default class FileService {
         };
       }
 
-      // 3. Проверяем доступность
-      const reachable = await checkReachability(ip, config.reachabilityTimeout);
-      console.log(`📡 IP ${ip} доступен: ${reachable}`);
+      // Используем scanPortsWithReachabilityCheck вместо раздельных проверок
+      const scanResult = await scanPortsWithReachabilityCheck(ip);
+      console.log(`📡 IP ${ip} доступен: ${scanResult.reachable}`);
 
-      let portScanResult = { open: [], filtered: [] };
       let whoisData = {};
-
-      // 4. Получаем данные только для доступных хостов
-      if (reachable) {
+      if (scanResult.reachable) {
         try {
-          // Параллельно сканируем порты и получаем WHOIS
-          const [portResult, whoisResult] = await Promise.allSettled([
-            scanPortsSimple(ip).catch(() => ({ open: [], filtered: [] })),
-            this.getCachedWhois(ip).catch(() => ({})),
-          ]);
-
-          portScanResult =
-            portResult.status === "fulfilled"
-              ? portResult.value
-              : { open: [], filtered: [] };
-
-          whoisData =
-            whoisResult.status === "fulfilled" ? whoisResult.value : {};
-
-          console.log(
-            `🔌 ${ip}: найдено ${portScanResult.open.length} открытых и ${portScanResult.filtered.length} фильтрованных портов`
-          );
+          whoisData = await FileService.getCachedWhois(ip);
           console.log(
             `📝 ${ip}: получено ${Object.keys(whoisData).length} WHOIS записей`
           );
-        } catch (scanError) {
-          console.error(`❌ Ошибка сканирования ${ip}:`, scanError);
+        } catch (whoisError) {
+          console.warn(`Ошибка WHOIS для ${ip}:`, whoisError.message);
         }
       }
 
-      // 5. Подготавливаем данные для сохранения, включая существующие значения
+      // Формируем данные для сохранения
       const dbData = {
         ip: ip,
-        reachable: reachable,
-        port_data: portScanResult,
+        reachable: scanResult.reachable,
+        port_data: {
+          open: scanResult.open || [],
+          filtered: scanResult.filtered || []
+        },
         whois: whoisData,
-        // Добавляем существующие данные из базы
         existing_priority: existingPriority,
         existing_grouping: existingGrouping,
         existing_country: existingCountry,
       };
 
-      // 6. Сохраняем данные в базу с передачей существующих значений
+      // Сохраняем данные в базу
       const result = await this.updateSingleIP(dbData, existingHost?.id);
 
       return {
         success: true,
         ip: ip,
-        reachable: reachable,
-        ports: portScanResult,
+        reachable: scanResult.reachable,
+        ports: {
+          open: scanResult.open || [],
+          filtered: scanResult.filtered || []
+        },
         whoisCount: Object.keys(whoisData).length,
         existingData: {
           priority: existingPriority,
