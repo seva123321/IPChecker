@@ -8,8 +8,24 @@ import PriorityComment from './PriorityComment.js';
 import Grouping from './Grouping.js';
 import Country from './Country.js';
 import FileSource from './FileSource.js';
-import HostFileSource from './HostFileSource.js'; // ДОБАВЬТЕ
+import HostFileSource from './HostFileSource.js'; 
+import WebContent from './WebContent.js';  
 import sequelize from '../db.js';
+
+// Экспорт
+const models = {
+  Host,
+  Port,
+  WellKnownPort,
+  WhoisKey,
+  Whois,
+  Priority,
+  PriorityComment,
+  Grouping,
+  Country,
+  FileSource,
+  HostFileSource,
+};
 
 // Связи
 Host.hasMany(Port, { foreignKey: 'host_id', onDelete: 'CASCADE' });
@@ -60,20 +76,19 @@ HostFileSource.belongsTo(FileSource, { foreignKey: 'file_source_id' , onDelete: 
 Host.hasMany(HostFileSource, { foreignKey: 'host_id' , onDelete: 'CASCADE'});
 FileSource.hasMany(HostFileSource, { foreignKey: 'file_source_id' , onDelete: 'CASCADE'});
 
-// Экспорт
-const models = {
-  Host,
-  Port,
-  WellKnownPort,
-  WhoisKey,
-  Whois,
-  Priority,
-  PriorityComment,
-  Grouping,
-  Country,
-  FileSource,
-  HostFileSource,
-};
+
+// Связь Host ↔ WebContent
+Host.hasMany(WebContent, {
+  foreignKey: 'host_id',
+  as: 'WebContents',
+  onDelete: 'CASCADE'
+});
+
+WebContent.belongsTo(Host, {
+  foreignKey: 'host_id',
+  as: 'Host'
+});
+
 
 export {
   Host,
