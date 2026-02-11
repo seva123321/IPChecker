@@ -30,31 +30,31 @@ const cleanupCache = () => {
 const getCacheKey = (req) => req.ip || 'unknown';
 
 // Получение фильтров с кэшированием
-const getFilters = (req, portOpened, portFiltered) => {
+const getFilters = (req, isPortOpened, isPortFiltered) => {
   const cacheKey = getCacheKey(req);
   const cachedFilters = filterCache.get(cacheKey);
   
   // Очищаем старый кэш
   cleanupCache();
   
-  const hasExplicitFilters = portOpened !== undefined || portFiltered !== undefined;
+  const hasExplicitFilters = isPortOpened !== undefined || isPortFiltered !== undefined;
   
   let useOpened, useFiltered;
   
   if (hasExplicitFilters) {
-    useOpened = portOpened === 'true';
-    useFiltered = portFiltered === 'true';
+    useOpened = isPortOpened === 'true';
+    useFiltered = isPortFiltered === 'true';
     
     // Сохраняем в кэш
     filterCache.set(cacheKey, {
-      portOpened: useOpened,
-      portFiltered: useFiltered,
+      isPortOpened: useOpened,
+      isPortFiltered: useFiltered,
       timestamp: Date.now(),
       lastUsed: Date.now()
     });
   } else if (cachedFilters) {
-    useOpened = cachedFilters.portOpened;
-    useFiltered = cachedFilters.portFiltered;
+    useOpened = cachedFilters.isPortOpened;
+    useFiltered = cachedFilters.isPortFiltered;
     cachedFilters.lastUsed = Date.now();
   } else {
     useOpened = false;
@@ -144,8 +144,8 @@ export const groupPort = async (req, res) => {
       page = 1, 
       limit = 10, 
       port: portQuery,
-      portOpened,
-      portFiltered 
+      isPortOpened,
+      isPortFiltered 
     } = req.query;
     
     const pageNum = Math.max(1, parseInt(page, 10));
@@ -153,7 +153,7 @@ export const groupPort = async (req, res) => {
     const offset = (pageNum - 1) * pageSize;
 
     // Получаем фильтры
-    const filters = getFilters(req, portOpened, portFiltered);
+    const filters = getFilters(req, isPortOpened, isPortFiltered);
     const portTypeCondition = buildPortTypeCondition(filters.useOpened, filters.useFiltered);
 
     // Проверяем фильтр по порту
@@ -223,8 +223,8 @@ export const groupPort = async (req, res) => {
           hasPrev: false,
         },
         filter_params: {
-          portOpened: filters.useOpened,
-          portFiltered: filters.useFiltered,
+          isPortOpened: filters.useOpened,
+          isPortFiltered: filters.useFiltered,
           port: targetPort || undefined,
           using_cached: !filters.hasExplicitFilters && filters.cachedFilters
         }
@@ -261,8 +261,8 @@ export const groupPort = async (req, res) => {
           hasPrev: pageNum > 1,
         },
         filter_params: {
-          portOpened: filters.useOpened,
-          portFiltered: filters.useFiltered,
+          isPortOpened: filters.useOpened,
+          isPortFiltered: filters.useFiltered,
           port: targetPort || undefined,
           using_cached: !filters.hasExplicitFilters && filters.cachedFilters
         }
@@ -354,8 +354,8 @@ export const groupPort = async (req, res) => {
       field: "port",
       tabs: uniquePorts,
       filter_params: {
-        portOpened: filters.useOpened,
-        portFiltered: filters.useFiltered,
+        isPortOpened: filters.useOpened,
+        isPortFiltered: filters.useFiltered,
         port: targetPort || undefined,
         using_cached: !filters.hasExplicitFilters && filters.cachedFilters,
         explicit_filters: filters.hasExplicitFilters
@@ -375,8 +375,8 @@ export const getPortInfo = async (req, res) => {
       port: portQuery,
       page = 1,
       limit = 10,
-      portOpened,
-      portFiltered,
+      isPortOpened,
+      isPortFiltered,
     } = req.query;
 
     const pageNum = Math.max(1, parseInt(page) || 1);
@@ -425,7 +425,7 @@ export const getPortInfo = async (req, res) => {
     }
 
     // Получаем фильтры
-    const filters = getFilters(req, portOpened, portFiltered);
+    const filters = getFilters(req, isPortOpened, isPortFiltered);
     const portTypeCondition = buildPortTypeCondition(filters.useOpened, filters.useFiltered);
 
     // Специальный случай: хосты без портов
