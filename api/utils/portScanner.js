@@ -103,7 +103,8 @@ export async function scanPortsWithReachabilityCheck(ip, ports = OPTIMIZED_PORTS
   try {
     // Комбинированная команда nmap для проверки доступности и сканирования портов
     const command = `nmap -p ${ports} -Pn --host-timeout 8s --max-rtt-timeout 500ms --max-retries 1 ${ip}`;
-    
+    // получение title
+    // nmap -p 80,443,8080 --script http-title --script-args http.useragent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" <IP>
     const { stdout } = await execAsync(command, { timeout: 10000 });
     
     const lines = stdout.split('\n');

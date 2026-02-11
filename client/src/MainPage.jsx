@@ -52,7 +52,7 @@ export function MainPage({ service }) {
   const [reportData, setReportData] = useState({ items: [], pagination: {} })
   const [page, setPage] = useState(1)
   const [path, setPath] = useState({ params: {}, endpoint: 'ip' })
-  const [activeTab, setActiveTab] = useState('searchSuper')
+  const [activeTab, setActiveTab] = useState('searchFast')
   const [tabs, setTabs] = useState([]) // <-- Состояние для табов
   const [searchParams, setSearchParams] = useState(initialSearchText)
   const [isLoading, setIsLoading] = useState(false)
@@ -273,7 +273,10 @@ export function MainPage({ service }) {
                 key: 'searchFast',
                 children: (
                   <PanelFilters
-                    onSearch={(endpoint, params) => fetchData(endpoint, params)}
+                    onSearch={(endpoint, params) => {
+                      fetchData(endpoint, params) 
+                      if (endpoint === 'ip') setTabs([])
+                      }}
                     onGroup={(endpoint, params) =>
                       fetchGroupData(endpoint, params)
                     }
