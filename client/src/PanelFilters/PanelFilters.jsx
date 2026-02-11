@@ -68,8 +68,8 @@ export function PanelFilters({ onSearch, onGroup, service, setSearchParams }) {
               <Tooltip title="Открытые порты">
                 <label className={cn.checkboxLabel}>
                   <Checkbox
-                    checked={searchText.portOpened || false}
-                    onChange={(e) => handleCheckboxChange('portOpened', e)}
+                    checked={searchText.isPortOpened || false}
+                    onChange={(e) => handleCheckboxChange('isPortOpened', e)}
                   />
                   Открытые
                 </label>
@@ -77,8 +77,8 @@ export function PanelFilters({ onSearch, onGroup, service, setSearchParams }) {
               <Tooltip title="Фильтрованные порты">
                 <label className={cn.checkboxLabel}>
                   <Checkbox
-                    checked={searchText.portFiltered || false}
-                    onChange={(e) => handleCheckboxChange('portFiltered', e)}
+                    checked={searchText.isPortFiltered || false}
+                    onChange={(e) => handleCheckboxChange('isPortFiltered', e)}
                   />
                   Фильтрованные
                 </label>
@@ -90,8 +90,8 @@ export function PanelFilters({ onSearch, onGroup, service, setSearchParams }) {
             onClick={() =>
               onSearch('ports', {
                 port: searchText.port || '',
-                portOpened: searchText.portOpened || false,
-                portFiltered: searchText.portFiltered || false,
+                isPortOpened: searchText.isPortOpened || false,
+                isPortFiltered: searchText.isPortFiltered || false,
               })
             }
             className={cn.searchButton}
@@ -102,8 +102,8 @@ export function PanelFilters({ onSearch, onGroup, service, setSearchParams }) {
           <Button
             onClick={() =>
               onSearch('ports/group', {
-                portOpened: searchText.portOpened || false,
-                portFiltered: searchText.portFiltered || false,
+                isPortOpened: searchText.isPortOpened || false,
+                isPortFiltered: searchText.isPortFiltered || false,
               })
             }
             className={cn.groupButton}

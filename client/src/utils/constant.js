@@ -5,7 +5,7 @@ export const initialDateRange = [dayjs(-1).month(0).date(1), dayjs()]
 export const initialSearchText = {
   ip: '',
   isPortOpened: true,
-  isPortFiltered: true,
+  isPortFiltered: false,//true,
   portOpened: '',
   portFiltered: '',
   keyword: '',

@@ -6,8 +6,8 @@ const useSearch = ({onSearch, setSearchParams}) => {
     ip: initialSearchText.ip || '',
     port: initialSearchText.port || '',
     keyword: initialSearchText.keyword || '',
-    portOpened: initialSearchText.portOpened || false,
-    portFiltered: initialSearchText.portFiltered || false,
+    isPortOpened: initialSearchText.isPortOpened || false,
+    isPortFiltered: initialSearchText.isPortFiltered || false,
   })
 
   // Оптимизированные обработчики с использованием useCallback
@@ -31,15 +31,15 @@ const useSearch = ({onSearch, setSearchParams}) => {
       ip: '',
       port: '',
       keyword: '',
-      portOpened: false,
-      portFiltered: false,
+      isPortOpened: false,
+      isPortFiltered: false,
     })
     setSearchParams({
       ip: '',
       port: '',
       keyword: '',
-      portOpened: false,
-      portFiltered: false,
+      isPortOpened: false,
+      isPortFiltered: false,
     })
     onSearch('ip', {})
   }, [onSearch, setSearchParams])
