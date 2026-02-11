@@ -6,11 +6,10 @@ import { PortsSection } from './components/PortsSection/PortsSection'
 import { WhoisSection } from './components/WhoisSection/WhoisSection'
 import cn from './Item.module.scss'
 
-// Item.jsx - обновленный компонент
 export const Item = ({ item }) => {
   const {
     currentItem,
-    setCurrentItem, // Добавим setCurrentItem из useItemData
+    setCurrentItem,
     isWhoisOpen,
     whois,
     handlePriorityStatusUpdate,
@@ -44,8 +43,13 @@ export const Item = ({ item }) => {
   // Функция для обработки обновления данных
   const handleItemUpdate = (updatedData) => {
     if (updatedData && updatedData.ip === ip) {
-      // Обновляем текущие данные
-      setCurrentItem(updatedData)
+      // Используем setCurrentItem из useItemData
+      setCurrentItem(prev => ({
+        ...prev,
+        ...updatedData,
+        // Сохраняем приоритетную информацию, если она не пришла в обновлении
+        priority_info: updatedData.priority_info || prev.priority_info,
+      }))
     }
   }
 
@@ -70,11 +74,16 @@ export const Item = ({ item }) => {
           hostId={hostId}
           onUpdate={handleItemUpdate} // Передаем функцию обновления
           formatDate={formatDate}
+          currentItem={currentItem} // Добавляем текущие данные
         />
 
         <Divider style={{ margin: '12px 0' }} />
 
-        <PortsSection openPorts={openPorts} filteredPorts={filteredPorts} />
+        <PortsSection 
+          openPorts={openPorts} 
+          filteredPorts={filteredPorts} 
+          currentItem={currentItem} // Передаем для обновления
+        />
 
         <WhoisSection
           hasWhois={hasWhois}
@@ -87,9 +96,19 @@ export const Item = ({ item }) => {
   )
 }
 
+// import { Badge, Card, Divider } from 'antd'
+// import classNames from 'classnames'
+// import { useItemData } from './hooks/useItemData'
+// import { ItemHeader } from './components/ItemHeader/ItemHeader'
+// import { PortsSection } from './components/PortsSection/PortsSection'
+// import { WhoisSection } from './components/WhoisSection/WhoisSection'
+// import cn from './Item.module.scss'
+
+// // Item.jsx - обновленный компонент
 // export const Item = ({ item }) => {
 //   const {
 //     currentItem,
+//     setCurrentItem, // Добавим setCurrentItem из useItemData
 //     isWhoisOpen,
 //     whois,
 //     handlePriorityStatusUpdate,
@@ -120,6 +139,14 @@ export const Item = ({ item }) => {
 //       })
 //     : cn.ipItem
 
+//   // Функция для обработки обновления данных
+//   const handleItemUpdate = (updatedData) => {
+//     if (updatedData && updatedData.ip === ip) {
+//       // Обновляем текущие данные
+//       setCurrentItem(updatedData)
+//     }
+//   }
+
 //   return (
 //     <Badge.Ribbon
 //       text={reachable ? '✅ Доступен' : '❌ Недоступен'}
@@ -139,15 +166,13 @@ export const Item = ({ item }) => {
 //           priority={priority}
 //           grouping={grouping}
 //           hostId={hostId}
-//           onUpdate={handlePriorityStatusUpdate}
+//           onUpdate={handleItemUpdate} // Передаем функцию обновления
 //           formatDate={formatDate}
 //         />
 
 //         <Divider style={{ margin: '12px 0' }} />
 
 //         <PortsSection openPorts={openPorts} filteredPorts={filteredPorts} />
-
-//         {/* <CommentSection comment={comment} /> */}
 
 //         <WhoisSection
 //           hasWhois={hasWhois}
